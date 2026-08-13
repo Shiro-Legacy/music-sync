@@ -59,7 +59,8 @@ export async function playContext(
   }
   await TrackPlayer.reset();
   await TrackPlayer.add(ordered.map((row) => toPlayerTrack(row, cfg)));
-  await TrackPlayer.skip(start);
+  // Adding to an empty RNTP queue already selects index 0; avoid a redundant native skip.
+  if (start > 0) await TrackPlayer.skip(start);
   await TrackPlayer.play();
 }
 
