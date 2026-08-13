@@ -14,9 +14,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ios: {
     supportsTablet: false,
     bundleIdentifier: IS_DEV ? 'com.jiaqi.musicsync.dev' : 'com.jiaqi.musicsync',
-    // TODO: set to the personal-team ID once device signing is set up
-    // (MAC-SETUP §3; find it with `security find-identity -v -p codesigning`).
-    // appleTeamId: 'XXXXXXXXXX',
+    // Free-provisioning personal team (7-day profiles — see MAC-SETUP §4).
+    appleTeamId: 'BK5VXTTH6P',
     infoPlist: {
       NSAppTransportSecurity: {
         // The desktop server speaks plain HTTP on the LAN.
