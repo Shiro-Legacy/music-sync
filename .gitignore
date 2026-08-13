@@ -1,6 +1,9 @@
 node_modules/
 dist/
 build/
+
+# your actual music library — never committed
+/music/
 *.log
 .DS_Store
 Thumbs.db
