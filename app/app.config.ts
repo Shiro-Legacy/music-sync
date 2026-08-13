@@ -6,6 +6,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: IS_DEV ? 'MusicSync (Dev)' : 'MusicSync',
   slug: 'musicsync',
+  scheme: IS_DEV ? 'musicsync-dev' : 'musicsync',
   version: '1.0.0',
   orientation: 'portrait',
   icon: './assets/icon.png',
@@ -13,6 +14,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ios: {
     supportsTablet: false,
     bundleIdentifier: IS_DEV ? 'com.jiaqi.musicsync.dev' : 'com.jiaqi.musicsync',
+    // TODO: set to the personal-team ID once device signing is set up
+    // (MAC-SETUP §3; find it with `security find-identity -v -p codesigning`).
+    // appleTeamId: 'XXXXXXXXXX',
     infoPlist: {
       NSAppTransportSecurity: {
         // The desktop server speaks plain HTTP on the LAN.
