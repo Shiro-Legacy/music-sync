@@ -26,6 +26,10 @@ marked `[verify]`.
 - Native pieces that get compiled: `react-native-track-player`,
   `@kesha-antonov/react-native-background-downloader`, the Expo SDK modules, and the
   local Expo module in `app/modules/backup-exclusion` (autolinked as a pod).
+  `react-native-track-player` 4.1.2 is a legacy NativeModule, but React Native 0.86
+  keeps the TurboModule interop layer used to load it on iOS. After every React
+  Native or track-player upgrade, run the physical-device playback gate in
+  [`PLAYBACK-SMOKE-TEST.md`](PLAYBACK-SMOKE-TEST.md).
 - Signing uses a **free Apple ID** (Personal Team). Consequences: provisioning
   profiles expire after 7 days (weekly re-install, see section 4), at most 10 new
   App IDs per rolling 7 days, and at most 3 free-provisioned apps installed on the
@@ -176,6 +180,11 @@ The install succeeds but launching shows **"Untrusted Developer"**. On the iPhon
    for enterprise apps on iOS 18+; personal-team apps have historically been plain
    "Trust"]`.
 4. Launch MusicSync from the home screen.
+
+Before treating the device build as complete, run
+[`PLAYBACK-SMOKE-TEST.md`](PLAYBACK-SMOKE-TEST.md). It verifies local and streamed
+playback, background audio, queue operations, interruptions, and Lock Screen/Control
+Center commands on the physical iPhone.
 
 First launch on the LAN: iOS will ask for **Local Network** permission (the app
 declares `NSLocalNetworkUsageDescription`, and plain-HTTP LAN traffic is allowed via
