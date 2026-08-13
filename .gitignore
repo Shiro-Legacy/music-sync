@@ -20,3 +20,4 @@ app/web-build/
 .env.*
 .vscode/
 .idea/
+.quad/
