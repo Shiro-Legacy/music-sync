@@ -54,6 +54,20 @@ export function trackDestinationPath(row: Pick<TrackRow, 'id' | 'path' | 'format
   return uriToPath(trackFileUri(row));
 }
 
+/**
+ * Current file:// URI of a row's downloaded audio, or null when it is not on
+ * disk. The db's `localUri` records the absolute URI at download time, but iOS
+ * assigns a new container path on every reinstall, so the stored prefix goes
+ * stale — always resolve against the current container instead.
+ */
+export function resolveLocalUri(
+  row: Pick<TrackRow, 'id' | 'path' | 'format' | 'localUri'>,
+): string | null {
+  if (row.localUri === null) return null;
+  const file = new File(musicDir(), trackFileName(row));
+  return file.exists ? file.uri : null;
+}
+
 /** Local artwork file URI, or null when it has not been downloaded yet. */
 export function localArtworkUri(artworkId: string): string | null {
   const file = new File(artworkDir(), artworkId);

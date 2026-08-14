@@ -46,7 +46,12 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="player" options={{ presentation: 'modal', headerShown: false }} />
+        {/* fullScreenModal, not 'modal': the sheet's pull-down recognizer cancels
+            seek-bar drags even with gestureEnabled: false (verified on device). */}
+        <Stack.Screen
+          name="player"
+          options={{ presentation: 'fullScreenModal', headerShown: false, gestureEnabled: false }}
+        />
         <Stack.Screen name="pair" options={{ presentation: 'modal', title: 'Pair with Server' }} />
       </Stack>
     </ThemeProvider>

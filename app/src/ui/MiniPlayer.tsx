@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import TrackPlayer, { useActiveTrack, useIsPlaying } from 'react-native-track-player';
@@ -29,7 +30,7 @@ export function MiniPlayer() {
           <Image source={{ uri: artwork }} style={styles.art} />
         ) : (
           <View style={[styles.art, styles.artPlaceholder]}>
-            <Text style={styles.artGlyph}>♪</Text>
+            <SymbolView name="music.note" size={16} tintColor={colors.textDim} />
           </View>
         )}
         <View style={styles.meta}>
@@ -48,7 +49,11 @@ export function MiniPlayer() {
           }}
           style={styles.playButton}
         >
-          <Text style={styles.playGlyph}>{playing === true ? '❚❚' : '▶'}</Text>
+          <SymbolView
+            name={playing === true ? 'pause.fill' : 'play.fill'}
+            size={20}
+            tintColor={colors.text}
+          />
         </Pressable>
       </Pressable>
     </View>
@@ -82,10 +87,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  artGlyph: {
-    color: colors.textDim,
-    fontSize: 16,
-  },
   meta: {
     flex: 1,
     gap: 1,
@@ -104,9 +105,5 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  playGlyph: {
-    color: colors.text,
-    fontSize: 18,
   },
 });

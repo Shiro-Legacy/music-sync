@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,24 +16,14 @@ import { colors, formatDuration } from '../src/ui/theme';
 
 const REPEAT_CYCLE: RepeatMode[] = [RepeatMode.Off, RepeatMode.Queue, RepeatMode.Track];
 
-function repeatGlyph(mode: RepeatMode): string {
-  switch (mode) {
-    case RepeatMode.Track:
-      return '🔂';
-    case RepeatMode.Queue:
-      return '🔁';
-    default:
-      return '↻';
-  }
-}
-
 export default function PlayerScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const track = useActiveTrack();
   const { playing } = useIsPlaying();
-  const progress = useProgress(500);
+  const progress = useProgress(250);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>(RepeatMode.Off);
+  const [scrubSeconds, setScrubSeconds] = useState<number | null>(null);
 
   useEffect(() => {
     void TrackPlayer.getRepeatMode().then(setRepeatMode);
@@ -47,18 +38,19 @@ export default function PlayerScreen() {
 
   const artwork = typeof track?.artwork === 'string' ? track.artwork : undefined;
   const duration = progress.duration > 0 ? progress.duration : (track?.duration ?? 0);
+  const shownPosition = scrubSeconds ?? progress.position;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 24 }]}>
       <Pressable hitSlop={12} onPress={() => router.back()} style={styles.dismiss}>
-        <Text style={styles.dismissGlyph}>⌄</Text>
+        <SymbolView name="chevron.down" size={22} tintColor={colors.textDim} weight="semibold" />
       </Pressable>
 
       {artwork !== undefined ? (
         <Image source={{ uri: artwork }} style={styles.art} />
       ) : (
         <View style={[styles.art, styles.artPlaceholder]}>
-          <Text style={styles.artGlyph}>♪</Text>
+          <SymbolView name="music.note" size={84} tintColor={colors.textDim} />
         </View>
       )}
 
@@ -77,19 +69,20 @@ export default function PlayerScreen() {
           position={progress.position}
           duration={duration}
           onSeek={(seconds) => void TrackPlayer.seekTo(seconds)}
+          onScrub={setScrubSeconds}
         />
         <View style={styles.times}>
-          <Text style={styles.time}>{formatDuration(progress.position)}</Text>
-          <Text style={styles.time}>-{formatDuration(Math.max(0, duration - progress.position))}</Text>
+          <Text style={styles.time}>{formatDuration(shownPosition)}</Text>
+          <Text style={styles.time}>-{formatDuration(Math.max(0, duration - shownPosition))}</Text>
         </View>
       </View>
 
       <View style={styles.controls}>
         <Pressable hitSlop={10} onPress={() => void shuffleRemaining()} style={styles.sideButton}>
-          <Text style={styles.sideGlyph}>⤨</Text>
+          <SymbolView name="shuffle" size={22} tintColor={colors.textDim} />
         </Pressable>
         <Pressable hitSlop={10} onPress={() => void TrackPlayer.skipToPrevious()}>
-          <Text style={styles.transportGlyph}>⏮</Text>
+          <SymbolView name="backward.fill" size={32} tintColor={colors.text} />
         </Pressable>
         <Pressable
           hitSlop={10}
@@ -99,20 +92,22 @@ export default function PlayerScreen() {
           }}
           style={styles.playButton}
         >
-          <Text style={styles.playGlyph}>{playing === true ? '❚❚' : '▶'}</Text>
+          <SymbolView
+            name={playing === true ? 'pause.fill' : 'play.fill'}
+            size={32}
+            tintColor={colors.text}
+            style={playing === true ? undefined : styles.playOffset}
+          />
         </Pressable>
         <Pressable hitSlop={10} onPress={() => void TrackPlayer.skipToNext()}>
-          <Text style={styles.transportGlyph}>⏭</Text>
+          <SymbolView name="forward.fill" size={32} tintColor={colors.text} />
         </Pressable>
         <Pressable hitSlop={10} onPress={() => void cycleRepeat()} style={styles.sideButton}>
-          <Text
-            style={[
-              styles.sideGlyph,
-              repeatMode !== RepeatMode.Off && { color: colors.accent },
-            ]}
-          >
-            {repeatGlyph(repeatMode)}
-          </Text>
+          <SymbolView
+            name={repeatMode === RepeatMode.Track ? 'repeat.1' : 'repeat'}
+            size={22}
+            tintColor={repeatMode === RepeatMode.Off ? colors.textDim : colors.accent}
+          />
         </Pressable>
       </View>
     </View>
@@ -130,10 +125,6 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: 8,
   },
-  dismissGlyph: {
-    color: colors.textDim,
-    fontSize: 24,
-  },
   art: {
     width: '100%',
     aspectRatio: 1,
@@ -145,10 +136,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  artGlyph: {
-    color: colors.textDim,
-    fontSize: 84,
   },
   meta: {
     marginTop: 28,
@@ -189,14 +176,6 @@ const styles = StyleSheet.create({
     width: 44,
     alignItems: 'center',
   },
-  sideGlyph: {
-    color: colors.textDim,
-    fontSize: 22,
-  },
-  transportGlyph: {
-    color: colors.text,
-    fontSize: 34,
-  },
   playButton: {
     width: 76,
     height: 76,
@@ -205,8 +184,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  playGlyph: {
-    color: colors.text,
-    fontSize: 30,
+  playOffset: {
+    marginLeft: 4,
   },
 });
