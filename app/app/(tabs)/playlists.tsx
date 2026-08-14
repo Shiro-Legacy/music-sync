@@ -1,7 +1,7 @@
 import { FlashList } from '@shopify/flash-list';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Alert, InteractionManager, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
   addTracksToPlaylist,
@@ -23,16 +23,24 @@ function playlistMeta(playlist: PlaylistSummary): string {
 
 export default function PlaylistsScreen() {
   const router = useRouter();
-  const [version, setVersion] = useState(0);
+  const [playlists, setPlaylists] = useState<PlaylistSummary[]>(() => listPlaylists());
+
+  const refresh = useCallback(() => {
+    setPlaylists(listPlaylists());
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
-      setVersion((value) => value + 1);
-    }, []),
+      refresh();
+    }, [refresh]),
   );
 
-  const playlists = useMemo(() => listPlaylists(), [version]);
-  const refresh = () => setVersion((value) => value + 1);
+  // Alert.prompt's native callback can land while the keyboard/alert is still
+  // tearing down; a setState then is dropped until the next focus. Wait for
+  // that teardown, then apply the new list.
+  const refreshAfterPrompt = useCallback(() => {
+    InteractionManager.runAfterInteractions(refresh);
+  }, [refresh]);
 
   const promptForName = (title: string, initialName: string, onSave: (name: string) => void) => {
     Alert.prompt(
@@ -54,7 +62,7 @@ export default function PlaylistsScreen() {
   const createEmpty = () => {
     promptForName('New Playlist', '', (name) => {
       createPlaylist(name);
-      refresh();
+      refreshAfterPrompt();
     });
   };
 
@@ -79,7 +87,7 @@ export default function PlaylistsScreen() {
           id,
           unsorted.map((track) => track.id),
         );
-        refresh();
+        refreshAfterPrompt();
       },
       'plain-text',
       'Unsorted',
@@ -108,7 +116,7 @@ export default function PlaylistsScreen() {
   const rename = (playlist: PlaylistSummary) => {
     promptForName('Rename Playlist', playlist.name, (name) => {
       renamePlaylist(playlist.id, name);
-      refresh();
+      refreshAfterPrompt();
     });
   };
 
@@ -147,6 +155,7 @@ export default function PlaylistsScreen() {
       </View>
       <FlashList
         data={playlists}
+        extraData={playlists}
         keyExtractor={(item) => String(item.id)}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
