@@ -91,23 +91,33 @@ export function MiniPlayer() {
       style={[styles.container, { bottom, opacity, transform: [{ translateX: dragX }] }]}
       {...pan.panHandlers}
     >
-      <Pressable style={styles.inner} onPress={() => router.push('/player')}>
-        {artwork !== undefined ? (
-          <Image source={{ uri: artwork }} style={styles.art} />
-        ) : (
-          <View style={[styles.art, styles.artPlaceholder]}>
-            <SymbolView name="music.note" size={16} tintColor={colors.textDim} />
-          </View>
-        )}
-        <View style={styles.meta}>
-          <Text numberOfLines={1} style={styles.title}>
-            {track.title ?? 'Unknown'}
-          </Text>
-          <Text numberOfLines={1} style={styles.artist}>
-            {track.artist ?? ''}
-          </Text>
-        </View>
+      <View style={styles.inner}>
         <Pressable
+          accessible
+          style={styles.openArea}
+          onPress={() => router.push('/player')}
+          accessibilityRole="button"
+          accessibilityLabel={`Now playing ${track.title ?? 'Unknown'} by ${track.artist ?? 'Unknown artist'}`}
+          accessibilityHint="Opens the full player"
+        >
+          {artwork !== undefined ? (
+            <Image source={{ uri: artwork }} style={styles.art} />
+          ) : (
+            <View style={[styles.art, styles.artPlaceholder]}>
+              <SymbolView name="music.note" size={16} tintColor={colors.textDim} />
+            </View>
+          )}
+          <View style={styles.meta}>
+            <Text numberOfLines={1} style={styles.title}>
+              {track.title ?? 'Unknown'}
+            </Text>
+            <Text numberOfLines={1} style={styles.artist}>
+              {track.artist ?? ''}
+            </Text>
+          </View>
+        </Pressable>
+        <Pressable
+          accessible
           accessibilityLabel={playing === true ? 'Pause' : 'Play'}
           accessibilityRole="button"
           hitSlop={12}
@@ -124,6 +134,7 @@ export function MiniPlayer() {
           />
         </Pressable>
         <Pressable
+          accessible
           accessibilityLabel="Next song"
           accessibilityRole="button"
           hitSlop={12}
@@ -132,7 +143,7 @@ export function MiniPlayer() {
         >
           <SymbolView name="forward.fill" size={20} tintColor={colors.text} />
         </Pressable>
-      </Pressable>
+      </View>
     </Animated.View>
   );
 }
@@ -153,6 +164,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 8,
+    gap: 10,
+  },
+  openArea: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
     gap: 10,
   },
   art: {

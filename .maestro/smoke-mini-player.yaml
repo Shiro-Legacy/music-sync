@@ -1,0 +1,29 @@
+appId: com.jiaqi.musicsync
+---
+# Release-build smoke: mini player (no dev client, no Metro).
+- launchApp
+- extendedWaitUntil:
+    visible: "Library"
+    timeout: 20000
+- tapOn: "Songs"
+- assertVisible: "Long Tone.*"
+# Tap a long track so it stays put while we drive the bar.
+- tapOn: "Long Tone.*"
+- extendedWaitUntil:
+    visible: "Now playing Long Tone by Long Test Co"
+    timeout: 5000
+# play/pause toggle
+- tapOn: "Pause"
+- assertVisible: "Play"
+- tapOn: "Play"
+- assertVisible: "Pause"
+# skip -> next track
+- tapOn: "Next song"
+- extendedWaitUntil:
+    visible: "Now playing Longer Tone by Long Test Co"
+    timeout: 5000
+# tap the bar (not a button) -> full player opens
+- tapOn: "Now playing Longer Tone.*"
+- extendedWaitUntil:
+    visible: "Longer Tone"
+    timeout: 5000

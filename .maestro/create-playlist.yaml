@@ -1,0 +1,22 @@
+appId: com.jiaqi.musicsync
+---
+# m138 diagnosis: does creating a playlist refresh the list?
+- launchApp
+- extendedWaitUntil:
+    visible: "Library"
+    timeout: 20000
+- tapOn: "Playlists, tab, 2 of 4"
+- assertVisible: ".*New Playlist"
+- tapOn: ".*New Playlist"
+- extendedWaitUntil:
+    visible: "Empty playlist"
+    timeout: 5000
+- tapOn: "Empty playlist"
+- extendedWaitUntil:
+    visible: "OK"
+    timeout: 5000
+- inputText: "Maestro Test"
+- tapOn: "OK"
+- extendedWaitUntil:
+    visible: "Maestro Test"
+    timeout: 6000
