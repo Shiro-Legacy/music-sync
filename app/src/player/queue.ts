@@ -3,6 +3,7 @@ import TrackPlayer, { type AddTrack } from 'react-native-track-player';
 import { authHeaders, trackUrl } from '../api/client';
 import { getServerConfig, type ServerConfig, type TrackRow } from '../db/queries';
 import { localArtworkUri, resolveLocalUri } from '../sync/paths';
+import { assertCapabilities } from './setup';
 
 /**
  * Maps a db row to an RNTP track. Synced tracks play from the local file;
@@ -63,6 +64,9 @@ export async function playContext(
   // Adding to an empty RNTP queue already selects index 0; avoid a redundant native skip.
   if (start > 0) await TrackPlayer.skip(start);
   await TrackPlayer.play();
+  // Now that a current track exists, re-assert remote-control capabilities —
+  // the startup application is a no-op while the queue is empty.
+  await assertCapabilities();
 }
 
 /** Shuffles the not-yet-played remainder of the current queue. */
