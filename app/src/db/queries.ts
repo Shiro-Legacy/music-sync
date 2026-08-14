@@ -42,6 +42,13 @@ export interface AlbumSummary {
   year: number | null;
 }
 
+export interface PlaylistSummary {
+  id: number;
+  name: string;
+  trackCount: number;
+  durationSec: number;
+}
+
 export interface StateCounts {
   queued: number;
   downloading: number;
@@ -262,6 +269,82 @@ export function syncedBytes(): number {
     "SELECT SUM(size) AS bytes FROM tracks WHERE state = 'synced'",
   );
   return row?.bytes ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Playlists
+// ---------------------------------------------------------------------------
+
+export function listPlaylists(): PlaylistSummary[] {
+  return db.getAllSync<PlaylistSummary>(
+    `SELECT p.id, p.name, COUNT(t.id) AS trackCount,
+            COALESCE(SUM(t.durationSec), 0) AS durationSec
+     FROM playlists p
+     LEFT JOIN playlist_tracks pt ON pt.playlistId = p.id
+     LEFT JOIN tracks t ON t.id = pt.trackId
+     GROUP BY p.id, p.name
+     ORDER BY p.updatedAt DESC, p.id DESC`,
+  );
+}
+
+export function createPlaylist(name: string): number {
+  const now = Date.now();
+  const result = db.runSync(
+    'INSERT INTO playlists (name, createdAt, updatedAt) VALUES (?, ?, ?)',
+    name,
+    now,
+    now,
+  );
+  return result.lastInsertRowId;
+}
+
+export function renamePlaylist(id: number, name: string): void {
+  db.runSync('UPDATE playlists SET name = ?, updatedAt = ? WHERE id = ?', name, Date.now(), id);
+}
+
+export function deletePlaylist(id: number): void {
+  db.runSync('DELETE FROM playlists WHERE id = ?', id);
+}
+
+export function playlistTracks(id: number): TrackRow[] {
+  return db.getAllSync<TrackRow>(
+    `SELECT t.*
+     FROM playlist_tracks pt
+     JOIN tracks t ON t.id = pt.trackId
+     WHERE pt.playlistId = ?
+     ORDER BY pt.position`,
+    id,
+  );
+}
+
+export function addTracksToPlaylist(id: number, trackIds: readonly string[]): void {
+  if (trackIds.length === 0) return;
+  db.withTransactionSync(() => {
+    const row = db.getFirstSync<{ maxPosition: number }>(
+      `SELECT COALESCE(MAX(position), -1) AS maxPosition
+       FROM playlist_tracks WHERE playlistId = ?`,
+      id,
+    );
+    let position = (row?.maxPosition ?? -1) + 1;
+    for (const trackId of trackIds) {
+      const result = db.runSync(
+        `INSERT OR IGNORE INTO playlist_tracks (playlistId, trackId, position)
+         VALUES (?, ?, ?)`,
+        id,
+        trackId,
+        position,
+      );
+      if (result.changes > 0) position += 1;
+    }
+    db.runSync('UPDATE playlists SET updatedAt = ? WHERE id = ?', Date.now(), id);
+  });
+}
+
+export function removeTrackFromPlaylist(id: number, trackId: string): void {
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM playlist_tracks WHERE playlistId = ? AND trackId = ?', id, trackId);
+    db.runSync('UPDATE playlists SET updatedAt = ? WHERE id = ?', Date.now(), id);
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,13 @@ export default function TabsLayout() {
           }}
         />
         <Tabs.Screen
+          name="playlists"
+          options={{
+            title: 'Playlists',
+            tabBarIcon: ({ color }) => <TabGlyph glyph="≡" color={String(color)} />,
+          }}
+        />
+        <Tabs.Screen
           name="sync"
           options={{
             title: 'Sync',

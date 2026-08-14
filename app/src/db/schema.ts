@@ -37,6 +37,21 @@ const MIGRATIONS: readonly string[] = [
     value TEXT NOT NULL
   );
   `,
+  `
+  CREATE TABLE playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  CREATE TABLE playlist_tracks (
+    playlistId INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    trackId TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (playlistId, trackId)
+  );
+  CREATE INDEX idx_playlist_tracks_pos ON playlist_tracks(playlistId, position);
+  `,
 ];
 
 let migrated = false;
@@ -44,7 +59,7 @@ let migrated = false;
 /** Idempotent; safe to call more than once per process. */
 export function runMigrations(): void {
   if (migrated) return;
-  db.execSync('PRAGMA journal_mode = WAL;');
+  db.execSync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const row = db.getFirstSync<{ user_version: number }>('PRAGMA user_version');
   let version = row?.user_version ?? 0;
   while (version < MIGRATIONS.length) {
