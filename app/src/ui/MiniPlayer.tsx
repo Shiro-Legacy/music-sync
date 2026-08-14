@@ -1,9 +1,11 @@
 import { useRouter, useSegments } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef } from 'react';
+import { Animated, Image, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import TrackPlayer, { useActiveTrack, useIsPlaying } from 'react-native-track-player';
 
+import { clearQueue } from '../player/queue';
 import { colors } from './theme';
 
 /** Approximate iOS bottom tab bar height (excluding the home indicator inset). */
@@ -23,6 +25,37 @@ export function MiniPlayer() {
   const track = useActiveTrack();
   const { playing } = useIsPlaying();
 
+  // Swipe down to dismiss: drag follows the finger, then either clears the
+  // queue (which unmounts the bar) or springs back.
+  const dragY = useRef(new Animated.Value(0)).current;
+  const dismissing = useRef(false);
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_event, gesture) =>
+        gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onPanResponderMove: (_event, gesture) => {
+        dragY.setValue(Math.max(0, gesture.dy));
+      },
+      onPanResponderRelease: (_event, gesture) => {
+        if (!dismissing.current && (gesture.dy > 40 || gesture.vy > 0.6)) {
+          dismissing.current = true;
+          Animated.timing(dragY, { toValue: 96, duration: 140, useNativeDriver: true }).start(() => {
+            void clearQueue().finally(() => {
+              // Reset for the next mount in case React reuses this instance.
+              dragY.setValue(0);
+              dismissing.current = false;
+            });
+          });
+        } else {
+          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+      },
+    }),
+  ).current;
+
   const rootSegment = segments[0];
   const isTabRoute = rootSegment === '(tabs)';
   const isLibraryRoute = rootSegment === 'library';
@@ -30,9 +63,17 @@ export function MiniPlayer() {
 
   const artwork = typeof track.artwork === 'string' ? track.artwork : undefined;
   const bottom = insets.bottom + (isTabRoute ? TAB_BAR_HEIGHT : 0);
+  const opacity = dragY.interpolate({
+    inputRange: [0, 96],
+    outputRange: [1, 0.2],
+    extrapolate: 'clamp',
+  });
 
   return (
-    <View style={[styles.container, { bottom }]}>
+    <Animated.View
+      style={[styles.container, { bottom, opacity, transform: [{ translateY: dragY }] }]}
+      {...pan.panHandlers}
+    >
       <Pressable style={styles.inner} onPress={() => router.push('/player')}>
         {artwork !== undefined ? (
           <Image source={{ uri: artwork }} style={styles.art} />
@@ -75,7 +116,7 @@ export function MiniPlayer() {
           <SymbolView name="forward.fill" size={20} tintColor={colors.text} />
         </Pressable>
       </Pressable>
-    </View>
+    </Animated.View>
   );
 }
 

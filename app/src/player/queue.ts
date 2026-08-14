@@ -183,3 +183,15 @@ export async function toggleShuffle(): Promise<void> {
     }
   });
 }
+
+/**
+ * Stops playback and empties the queue (mini player swipe-dismiss). Clears the
+ * saved context and shuffle mode so the next playContext starts fresh.
+ */
+export async function clearQueue(): Promise<void> {
+  setShuffleFlag(false);
+  return enqueue(async () => {
+    originalQueue = [];
+    await TrackPlayer.reset();
+  });
+}

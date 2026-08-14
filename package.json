@@ -11,5 +11,10 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "server": "npm run dev --workspace server"
+  },
+  "dependencies": {
+    "expo": "~57.0.7",
+    "react": "19.2.3",
+    "react-native": "0.86.0"
   }
 }

@@ -64,7 +64,7 @@ vi.mock('../src/api/client', () => ({
 vi.mock('../src/db/queries', () => ({ getServerConfig: vi.fn(() => null) }));
 vi.mock('../src/sync/paths', () => paths);
 
-import { playContext, toPlayerTrack, toggleShuffle } from '../src/player/queue';
+import { clearQueue, playContext, toPlayerTrack, toggleShuffle } from '../src/player/queue';
 import { usePlayerStore } from '../src/store/playerStore';
 
 function track(id: string): TrackRow {
@@ -222,6 +222,34 @@ describe('toggleShuffle', () => {
 
     expect(usePlayerStore.getState().shuffle).toBe(true);
     expect(trackPlayer.removeUpcomingTracks).not.toHaveBeenCalled();
+  });
+});
+
+describe('clearQueue', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    usePlayerStore.setState({ shuffle: false });
+    await trackPlayer.reset();
+  });
+
+  it('empties the native queue and turns shuffle off', async () => {
+    await playContext([track('a'), track('b')], 0, { shuffle: true });
+
+    await clearQueue();
+
+    expect(usePlayerStore.getState().shuffle).toBe(false);
+    expect(trackPlayer.reset).toHaveBeenCalled();
+  });
+
+  it('drops the saved context so a later shuffle-off has nothing stale to restore', async () => {
+    await playContext([track('a'), track('b'), track('c')], 0);
+    await clearQueue();
+
+    await playContext([track('x'), track('y')], 0);
+    await toggleShuffle(); // on
+    await toggleShuffle(); // off — must restore from the new context only
+
+    expect(addedIds().every((id) => ['x', 'y'].includes(id))).toBe(true);
   });
 });
 
