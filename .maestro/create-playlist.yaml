@@ -20,7 +20,7 @@ appId: com.jiaqi.musicsync
     timeout: 5000
 - inputText: "${NAME}"
 - tapOn: "OK"
-# Row renders as "<name>, N songs · M min, ›" — match by prefix.
+# Row renders as "<name>, N songs · M min, ›" (or hr at ≥1h) — match by prefix.
 - extendedWaitUntil:
     visible: "${NAME}.*"
     timeout: 6000
