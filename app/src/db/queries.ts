@@ -329,10 +329,10 @@ export function addTracksToPlaylist(id: number, trackIds: readonly string[]): vo
     for (const trackId of trackIds) {
       const result = db.runSync(
         `INSERT OR IGNORE INTO playlist_tracks (playlistId, trackId, position)
-         VALUES (?, ?, ?)`,
+         SELECT ?, id, ? FROM tracks WHERE id = ?`,
         id,
-        trackId,
         position,
+        trackId,
       );
       if (result.changes > 0) position += 1;
     }

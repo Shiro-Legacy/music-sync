@@ -61,6 +61,7 @@ export default function AddSongsScreen() {
       />
       <FlashList
         data={songs}
+        extraData={selected}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
