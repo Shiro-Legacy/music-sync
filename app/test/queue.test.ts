@@ -7,6 +7,7 @@ const trackPlayer = vi.hoisted(() => ({
   play: vi.fn<() => Promise<void>>(),
   reset: vi.fn<() => Promise<void>>(),
   skip: vi.fn<(index: number) => Promise<void>>(),
+  updateOptions: vi.fn<(options: unknown) => Promise<void>>(),
 }));
 
 const paths = vi.hoisted(() => ({
@@ -14,7 +15,11 @@ const paths = vi.hoisted(() => ({
   resolveLocalUri: vi.fn((row: { id: string }): string | null => `file:///current/${row.id}.mp3`),
 }));
 
-vi.mock('react-native-track-player', () => ({ default: trackPlayer }));
+vi.mock('react-native-track-player', () => ({
+  default: trackPlayer,
+  Capability: { Play: 'play', Pause: 'pause', SkipToNext: 'next', SkipToPrevious: 'previous', SeekTo: 'seek' },
+  IOSCategory: { Playback: 'playback' },
+}));
 vi.mock('../src/api/client', () => ({
   authHeaders: vi.fn(() => ({})),
   trackUrl: vi.fn((_cfg: unknown, id: string) => `http://server/tracks/${id}`),
@@ -55,6 +60,18 @@ describe('playContext', () => {
     trackPlayer.add.mockResolvedValue(undefined);
     trackPlayer.skip.mockResolvedValue(undefined);
     trackPlayer.play.mockResolvedValue(undefined);
+    trackPlayer.updateOptions.mockResolvedValue(undefined);
+  });
+
+  it('re-asserts remote-control capabilities after loading the queue', async () => {
+    await playContext([track('first')], 0);
+
+    expect(trackPlayer.updateOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ capabilities: expect.arrayContaining(['play', 'next']) }),
+    );
+    expect(trackPlayer.play.mock.invocationCallOrder[0]).toBeLessThan(
+      trackPlayer.updateOptions.mock.invocationCallOrder[0]!,
+    );
   });
 
   it('plays the first track without redundantly skipping to index zero', async () => {
