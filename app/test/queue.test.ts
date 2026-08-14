@@ -241,6 +241,17 @@ describe('clearQueue', () => {
     expect(trackPlayer.reset).toHaveBeenCalled();
   });
 
+  it('marks the player dismissed until the next playContext', async () => {
+    await playContext([track('a')], 0);
+    await clearQueue();
+    expect(usePlayerStore.getState().dismissed).toBe(true);
+
+    // The mini player hides on this flag, not on useActiveTrack, which never
+    // reports "no track" when a new context immediately replaces the queue.
+    await playContext([track('b')], 0);
+    expect(usePlayerStore.getState().dismissed).toBe(false);
+  });
+
   it('drops the saved context so a later shuffle-off has nothing stale to restore', async () => {
     await playContext([track('a'), track('b'), track('c')], 0);
     await clearQueue();

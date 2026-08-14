@@ -128,6 +128,7 @@ export async function playContext(
   opts?: { shuffle?: boolean },
 ): Promise<void> {
   if (rows.length === 0) return;
+  usePlayerStore.setState({ dismissed: false });
   return enqueue(async () => {
     const cfg = getServerConfig();
     const mapped = rows.map((row) => toPlayerTrack(row, cfg));
@@ -190,6 +191,7 @@ export async function toggleShuffle(): Promise<void> {
  */
 export async function clearQueue(): Promise<void> {
   setShuffleFlag(false);
+  usePlayerStore.setState({ dismissed: true });
   return enqueue(async () => {
     originalQueue = [];
     await TrackPlayer.reset();
