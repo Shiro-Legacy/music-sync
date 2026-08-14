@@ -1,7 +1,7 @@
 import { FlashList } from '@shopify/flash-list';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, InteractionManager, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
   addTracksToPlaylist,
@@ -35,11 +35,13 @@ export default function PlaylistsScreen() {
     }, [refresh]),
   );
 
-  // Alert.prompt's native callback can land while the keyboard/alert is still
-  // tearing down; a setState then is dropped until the next focus. Wait for
-  // that teardown, then apply the new list.
+  // On device (iOS 18), a repaint that lands while Alert.prompt's keyboard and
+  // alert are still tearing down can be swallowed; the simulator never shows
+  // this. Refresh immediately, then once more after the teardown has settled —
+  // re-reading the list twice is harmless and one of the two always paints.
   const refreshAfterPrompt = useCallback(() => {
-    InteractionManager.runAfterInteractions(refresh);
+    refresh();
+    setTimeout(refresh, 400);
   }, [refresh]);
 
   const promptForName = (title: string, initialName: string, onSave: (name: string) => void) => {
