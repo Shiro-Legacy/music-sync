@@ -1,6 +1,6 @@
 import { useRouter, useSegments } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Animated, Image, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import TrackPlayer, { useActiveTrack, useIsPlaying } from 'react-native-track-player';
@@ -40,9 +40,10 @@ export function MiniPlayer() {
         if (!dismissing.current && (gesture.dy > 40 || gesture.vy > 0.6)) {
           dismissing.current = true;
           Animated.timing(dragY, { toValue: 96, duration: 140, useNativeDriver: true }).start(() => {
-            void clearQueue().finally(() => {
-              // Reset for the next mount in case React reuses this instance.
-              dragY.setValue(0);
+            // Leave the bar slid down: useActiveTrack flips to undefined a beat
+            // after the reset, and zeroing dragY now would flash it back first.
+            void clearQueue().catch(() => {
+              Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
               dismissing.current = false;
             });
           });
@@ -56,10 +57,20 @@ export function MiniPlayer() {
     }),
   ).current;
 
+  // Once the bar is actually hidden, zero the drag so its next appearance
+  // starts in place.
+  const hidden = track === undefined;
+  useEffect(() => {
+    if (hidden) {
+      dragY.setValue(0);
+      dismissing.current = false;
+    }
+  }, [hidden, dragY]);
+
   const rootSegment = segments[0];
   const isTabRoute = rootSegment === '(tabs)';
   const isLibraryRoute = rootSegment === 'library';
-  if (track === undefined || (!isTabRoute && !isLibraryRoute)) return null;
+  if (hidden || (!isTabRoute && !isLibraryRoute)) return null;
 
   const artwork = typeof track.artwork === 'string' ? track.artwork : undefined;
   const bottom = insets.bottom + (isTabRoute ? TAB_BAR_HEIGHT : 0);
