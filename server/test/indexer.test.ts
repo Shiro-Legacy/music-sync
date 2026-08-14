@@ -78,11 +78,11 @@ describe('scanLibrary', () => {
     expect(root!.id).toBe(sha1('a.mp3'));
   });
 
-  it('falls back to filename/dirname metadata when parsing fails', () => {
+  it('falls back to filename metadata and an empty album when parsing fails', () => {
     const nested = store.get('sub/b.mp3')!;
     expect(nested.title).toBe('b');
     expect(nested.artist).toBe('Unknown Artist');
-    expect(nested.album).toBe('sub');
+    expect(nested.album).toBe('');
     expect(nested.durationSec).toBe(0);
     expect(nested.format).toBe('mp3');
     expect(nested.contentKey).toMatch(/^[0-9a-f]{40}$/);

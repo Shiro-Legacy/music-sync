@@ -113,7 +113,7 @@ async function buildEntry(
     format,
     title: stem,
     artist: 'Unknown Artist',
-    album: path.basename(path.dirname(absPath)),
+    album: '',
     durationSec: 0,
   };
 
