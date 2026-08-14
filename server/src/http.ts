@@ -11,17 +11,29 @@ import {
   type TrackFormat,
 } from '@music-sync/shared';
 
-/** Everything the HTTP layer needs from the rest of the server; injectable so tests can fake the index. */
-export interface ServerDeps {
-  serverId: string;
+/** One isolated library exposed by the HTTP layer; getter injection keeps tests lightweight. */
+export interface LibraryRuntime {
   name: string;
-  version: string;
-  token: string;
+  serverId: string;
+  tokenDigest: Buffer;
   getRev(): number;
   getTracks(): TrackEntry[];
   getTrackById(id: string): TrackEntry | undefined;
   getTrackFilePath(entry: TrackEntry): string;
   getArtwork(artworkId: string): { filePath: string; mime: string } | undefined;
+}
+
+/** Everything the HTTP layer needs from the rest of the server. */
+export interface ServerDeps {
+  name: string;
+  version: string;
+  libraries: LibraryRuntime[];
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    library: LibraryRuntime | null;
+  }
 }
 
 const TRACK_CONTENT_TYPES: Record<TrackFormat, string> = {
@@ -37,8 +49,26 @@ const TRACK_CONTENT_TYPES: Record<TrackFormat, string> = {
 
 const ARTWORK_ID_RE = /^[0-9a-f]{40}$/;
 
-function sha256(value: string): Buffer {
+export function digestToken(value: string): Buffer {
   return createHash('sha256').update(value, 'utf8').digest();
+}
+
+function bearerToken(authorization: string | undefined): string | undefined {
+  return authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined;
+}
+
+function resolveLibrary(
+  authorization: string | undefined,
+  libraries: LibraryRuntime[],
+): LibraryRuntime | undefined {
+  const bearer = bearerToken(authorization);
+  if (bearer === undefined) return undefined;
+  const candidateDigest = digestToken(bearer);
+  let match: LibraryRuntime | undefined;
+  for (const library of libraries) {
+    if (timingSafeEqual(candidateDigest, library.tokenDigest)) match ??= library;
+  }
+  return match;
 }
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -120,8 +150,10 @@ function ifMatchSatisfied(header: string, contentKey: string): boolean {
 }
 
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
+  if (deps.libraries.length === 0) throw new Error('At least one library is required');
+
   const app = Fastify({ logger: false, trustProxy: false });
-  const tokenDigest = sha256(deps.token);
+  app.decorateRequest('library', null);
 
   // LAN guard on every route; bearer auth on /api/v1/* except ping (open for pairing diagnostics).
   app.addHook('onRequest', async (request, reply) => {
@@ -129,13 +161,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       return reply.code(403).send({ error: 'forbidden: LAN clients only' });
     }
     const pathname = request.url.split('?', 1)[0] ?? request.url;
-    if (pathname.startsWith('/api/v1/') && pathname !== apiRoutes.ping) {
-      const header = request.headers.authorization;
-      const bearer =
-        header !== undefined && header.startsWith('Bearer ')
-          ? header.slice('Bearer '.length)
-          : undefined;
-      if (bearer === undefined || !timingSafeEqual(sha256(bearer), tokenDigest)) {
+    if (pathname.startsWith('/api/v1/')) {
+      request.library = resolveLibrary(request.headers.authorization, deps.libraries) ?? null;
+      if (pathname !== apiRoutes.ping && request.library === null) {
         return reply.code(401).send({ error: 'unauthorized' });
       }
     }
@@ -147,10 +175,11 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   await app.register(async (scope) => {
     await scope.register(compress);
 
-    scope.get(apiRoutes.ping, async (_request, reply) => {
+    scope.get(apiRoutes.ping, async (request, reply) => {
+      const library = request.library ?? deps.libraries[0]!;
       const body: PingResponse = {
         v: 1,
-        serverId: deps.serverId,
+        serverId: library.serverId,
         name: deps.name,
         version: deps.version,
       };
@@ -158,28 +187,30 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     });
 
     scope.get(apiRoutes.manifest, async (request, reply) => {
-      const etag = `"rev-${deps.getRev()}"`;
+      const library = request.library!;
+      const etag = `"rev-${library.getRev()}"`;
       reply.header('etag', etag);
       if (etagMatches(request.headers['if-none-match'], etag)) {
         return reply.code(304).send();
       }
       const manifest: Manifest = {
         v: 1,
-        serverId: deps.serverId,
-        rev: deps.getRev(),
+        serverId: library.serverId,
+        rev: library.getRev(),
         generatedAt: new Date().toISOString(),
-        tracks: deps.getTracks(),
+        tracks: library.getTracks(),
       };
       return reply.send(manifest);
     });
   });
 
   app.get<{ Params: { id: string } }>(apiRoutes.track(':id'), async (request, reply) => {
+    const library = request.library!;
     // Lookup by id only — a filesystem path is never derived from user input.
-    const entry = deps.getTrackById(request.params.id);
+    const entry = library.getTrackById(request.params.id);
     if (entry === undefined) return reply.code(404).send({ error: 'unknown track' });
 
-    const filePath = deps.getTrackFilePath(entry);
+    const filePath = library.getTrackFilePath(entry);
     let size: number;
     try {
       size = (await fsp.stat(filePath)).size;
@@ -222,7 +253,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       const { artworkId } = request.params;
       // Validate shape before the id goes anywhere near a path.
       if (!ARTWORK_ID_RE.test(artworkId)) return reply.code(404).send({ error: 'not found' });
-      const artwork = deps.getArtwork(artworkId);
+      const artwork = request.library!.getArtwork(artworkId);
       if (artwork === undefined) return reply.code(404).send({ error: 'not found' });
       try {
         await fsp.access(artwork.filePath);
