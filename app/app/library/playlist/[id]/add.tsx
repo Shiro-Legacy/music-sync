@@ -84,7 +84,7 @@ export default function AddSongsScreen() {
                   {item.title}
                 </Text>
                 <Text numberOfLines={1} style={styles.rowSubtitle}>
-                  {item.artist} · {item.album}
+                  {[item.artist, item.album].filter(Boolean).join(' · ')}
                 </Text>
               </View>
               <View style={[styles.check, checked && styles.checkSelected]}>
