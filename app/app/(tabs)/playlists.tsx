@@ -4,9 +4,11 @@ import { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
+  addTracksToPlaylist,
   createPlaylist,
   deletePlaylist,
   listPlaylists,
+  listUnplaylistedTracks,
   renamePlaylist,
   type PlaylistSummary,
 } from '../../src/db/queries';
@@ -56,6 +58,34 @@ export default function PlaylistsScreen() {
     });
   };
 
+  const createFromUnsorted = () => {
+    const unsorted = listUnplaylistedTracks();
+    if (unsorted.length === 0) {
+      Alert.alert('No unsorted songs', 'Every song is already in a playlist.');
+      return;
+    }
+    const noun = unsorted.length === 1 ? 'song' : 'songs';
+    Alert.prompt(
+      'New from unsorted',
+      `${unsorted.length} ${noun} not in any playlist.`,
+      (value) => {
+        const name = value.trim();
+        if (name === '') {
+          Alert.alert('Name required', 'Enter a name for the playlist.');
+          return;
+        }
+        const id = createPlaylist(name);
+        addTracksToPlaylist(
+          id,
+          unsorted.map((track) => track.id),
+        );
+        refresh();
+      },
+      'plain-text',
+      'Unsorted',
+    );
+  };
+
   const rename = (playlist: PlaylistSummary) => {
     promptForName('Rename Playlist', playlist.name, (name) => {
       renamePlaylist(playlist.id, name);
@@ -88,6 +118,13 @@ export default function PlaylistsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.toolbar}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={createFromUnsorted}
+          style={({ pressed }) => [styles.newButton, pressed && styles.pressed]}
+        >
+          <Text style={styles.newButtonLabel}>New from unsorted</Text>
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           onPress={create}
@@ -131,7 +168,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   toolbar: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: 8,
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 6,
