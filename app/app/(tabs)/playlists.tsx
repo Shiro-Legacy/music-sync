@@ -15,16 +15,16 @@ import {
 import { EmptyState } from '../../src/ui/EmptyState';
 import { colors } from '../../src/ui/theme';
 
-function formatHours(durationSec: number): string {
-  const hours = Math.max(0, durationSec) / 3600;
-  if (hours === 0) return '0 hr';
-  const rounded = Math.round(hours * 10) / 10;
-  return Number.isInteger(rounded) ? `${rounded} hr` : `${rounded.toFixed(1)} hr`;
+function formatPlaylistDuration(durationSec: number): string {
+  const sec = Math.max(0, durationSec);
+  if (sec < 3600) return `${Math.round(sec / 60)} min`;
+  const hours = Math.round((sec / 3600) * 10) / 10;
+  return Number.isInteger(hours) ? `${hours} hr` : `${hours.toFixed(1)} hr`;
 }
 
 function playlistMeta(playlist: PlaylistSummary): string {
   const songs = `${playlist.trackCount} ${playlist.trackCount === 1 ? 'song' : 'songs'}`;
-  return `${songs} · ${formatHours(playlist.durationSec)}`;
+  return `${songs} · ${formatPlaylistDuration(playlist.durationSec)}`;
 }
 
 export default function PlaylistsScreen() {

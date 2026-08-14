@@ -62,7 +62,7 @@ cd app && npx expo run:ios --configuration Release --device "iPhone 17"
 - Full player dismiss control is `"Close player"` (`app/app/player.tsx`).
 - Song rows expose `"<title>, <artist>, <badge>, <duration>"` — match with a
   regex selector, e.g. `tapOn: "Long Tone.*"`.
-- Playlist rows expose `"<name>, N songs · M hr, ›"` — match with
+- Playlist rows expose `"<name>, N songs · M min, ›"` or `"… M hr, ›"` — match with
   `"<name>.*"`, never an exact name.
 - Tabs expose `"<Name>, tab, <n> of 4"`; segments are `"Artists"/"Albums"/"Songs"`.
 
