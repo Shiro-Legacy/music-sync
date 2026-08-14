@@ -181,4 +181,51 @@ describe('playlist queries', () => {
     expect(joins?.count).toBe(0);
     expect(queries.listPlaylists().some((playlist) => playlist.id === deletedId)).toBe(false);
   });
+
+  it('lists unplaylisted tracks in Songs-tab order across every sync state', () => {
+    insertTrack('track-4', 'alpha', 30);
+    schema.db.runSync("UPDATE tracks SET state = 'queued' WHERE id = ?", 'track-4');
+    insertTrack('track-5', 'zeta', 45);
+    schema.db.runSync("UPDATE tracks SET state = 'failed' WHERE id = ?", 'track-5');
+
+    const first = queries.createPlaylist('First');
+    const second = queries.createPlaylist('Second');
+    queries.addTracksToPlaylist(first, ['track-1']);
+    queries.addTracksToPlaylist(second, ['track-1', 'track-2']);
+
+    expect(queries.listUnplaylistedTracks().map((track) => track.id)).toEqual([
+      'track-4',
+      'track-3',
+      'track-5',
+    ]);
+
+    queries.deletePlaylist(first);
+    expect(queries.listUnplaylistedTracks().map((track) => track.id)).toEqual([
+      'track-4',
+      'track-3',
+      'track-5',
+    ]);
+
+    queries.deletePlaylist(second);
+    expect(queries.listUnplaylistedTracks().map((track) => track.id)).toEqual([
+      'track-4',
+      'track-1',
+      'track-2',
+      'track-3',
+      'track-5',
+    ]);
+  });
+
+  it('bulk-adds 2000 tracks in one transaction without dropping or reordering', () => {
+    const ids = Array.from({ length: 2000 }, (_, index) => {
+      const id = `bulk-${String(index).padStart(4, '0')}`;
+      insertTrack(id, id, 10);
+      return id;
+    });
+    const playlistId = queries.createPlaylist('Bulk');
+    queries.addTracksToPlaylist(playlistId, ids);
+    queries.addTracksToPlaylist(playlistId, ids.slice(0, 10));
+
+    expect(queries.playlistTracks(playlistId).map((track) => track.id)).toEqual(ids);
+  });
 });

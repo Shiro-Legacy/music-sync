@@ -1,11 +1,16 @@
 import { FlashList } from '@shopify/flash-list';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useActiveTrack } from 'react-native-track-player';
 
-import { addTracksToPlaylist, listSongs, playlistTracks } from '../../../../src/db/queries';
+import {
+  addTracksToPlaylist,
+  listPlaylists,
+  listSongs,
+  playlistTracks,
+} from '../../../../src/db/queries';
 import { EmptyState } from '../../../../src/ui/EmptyState';
 import { MINI_PLAYER_HEIGHT } from '../../../../src/ui/MiniPlayer';
 import { colors } from '../../../../src/ui/theme';
@@ -33,6 +38,10 @@ export default function AddSongsScreen() {
     () => listSongs(search).filter((track) => !existingIds.has(track.id)),
     [existingIds, search],
   );
+  const playlistName = useMemo(
+    () => (id === null ? undefined : listPlaylists().find((playlist) => playlist.id === id)?.name),
+    [id],
+  );
 
   const toggle = (trackId: string) => {
     setSelected((current) => {
@@ -49,9 +58,48 @@ export default function AddSongsScreen() {
     router.back();
   };
 
+  const addAllFiltered = () => {
+    if (id === null || songs.length === 0) return;
+    addTracksToPlaylist(
+      id,
+      songs.map((track) => track.id),
+    );
+    router.back();
+  };
+
+  const confirmAddAll = () => {
+    if (id === null || songs.length === 0) return;
+    if (songs.length <= 50) {
+      addAllFiltered();
+      return;
+    }
+    const noun = songs.length === 1 ? 'song' : 'songs';
+    const target = playlistName ?? 'this playlist';
+    Alert.alert(`Add ${songs.length} ${noun} to ${target}?`, undefined, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Add', onPress: addAllFiltered },
+    ]);
+  };
+
   return (
     <View style={styles.container}>
-      <Stack.Screen options={{ title: 'Add Songs' }} />
+      <Stack.Screen
+        options={{
+          title: 'Add Songs',
+          headerRight: () => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: songs.length === 0 }}
+              disabled={songs.length === 0}
+              onPress={confirmAddAll}
+            >
+              <Text style={[styles.addAllLabel, songs.length === 0 && styles.addAllLabelDisabled]}>
+                Add all ({songs.length})
+              </Text>
+            </Pressable>
+          ),
+        }}
+      />
       <TextInput
         style={styles.search}
         placeholder="Search songs"
@@ -215,6 +263,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   addLabelDisabled: {
+    color: colors.textDim,
+  },
+  addAllLabel: {
+    color: colors.accent,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  addAllLabelDisabled: {
     color: colors.textDim,
   },
 });

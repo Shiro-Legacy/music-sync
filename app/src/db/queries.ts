@@ -317,6 +317,18 @@ export function playlistTracks(id: number): TrackRow[] {
   );
 }
 
+/** Library tracks in no playlist, same order as the Songs tab (`listSongs`). */
+export function listUnplaylistedTracks(): TrackRow[] {
+  return db.getAllSync<TrackRow>(
+    `SELECT t.*
+     FROM tracks t
+     WHERE NOT EXISTS (
+       SELECT 1 FROM playlist_tracks pt WHERE pt.trackId = t.id
+     )
+     ORDER BY t.title COLLATE NOCASE`,
+  );
+}
+
 export function addTracksToPlaylist(id: number, trackIds: readonly string[]): void {
   if (trackIds.length === 0) return;
   db.withTransactionSync(() => {
