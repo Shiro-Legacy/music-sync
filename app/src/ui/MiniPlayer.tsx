@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useRouter, useSegments } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,22 +9,30 @@ import { colors } from './theme';
 /** Approximate iOS bottom tab bar height (excluding the home indicator inset). */
 const TAB_BAR_HEIGHT = 49;
 
+/** Height reserved by screens that have bottom-anchored controls of their own. */
+export const MINI_PLAYER_HEIGHT = 52;
+
 /**
- * Persistent bar above the tab bar: current track, play/pause, opens the
- * full-screen player modal. Renders nothing while the queue is empty.
+ * Navigator-level player chrome. It sits above tabs on tab routes and above
+ * the safe area on detail routes, and renders nothing while the queue is empty.
  */
 export function MiniPlayer() {
   const router = useRouter();
+  const segments = useSegments();
   const insets = useSafeAreaInsets();
   const track = useActiveTrack();
   const { playing } = useIsPlaying();
 
-  if (track === undefined) return null;
+  const rootSegment = segments[0];
+  const isTabRoute = rootSegment === '(tabs)';
+  const isLibraryRoute = rootSegment === 'library';
+  if (track === undefined || (!isTabRoute && !isLibraryRoute)) return null;
 
   const artwork = typeof track.artwork === 'string' ? track.artwork : undefined;
+  const bottom = insets.bottom + (isTabRoute ? TAB_BAR_HEIGHT : 0);
 
   return (
-    <View style={[styles.container, { bottom: TAB_BAR_HEIGHT + insets.bottom }]}>
+    <View style={[styles.container, { bottom }]}>
       <Pressable style={styles.inner} onPress={() => router.push('/player')}>
         {artwork !== undefined ? (
           <Image source={{ uri: artwork }} style={styles.art} />
@@ -42,18 +50,29 @@ export function MiniPlayer() {
           </Text>
         </View>
         <Pressable
+          accessibilityLabel={playing === true ? 'Pause' : 'Play'}
+          accessibilityRole="button"
           hitSlop={12}
           onPress={() => {
             if (playing === true) void TrackPlayer.pause();
             else void TrackPlayer.play();
           }}
-          style={styles.playButton}
+          style={styles.controlButton}
         >
           <SymbolView
             name={playing === true ? 'pause.fill' : 'play.fill'}
             size={20}
             tintColor={colors.text}
           />
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Next song"
+          accessibilityRole="button"
+          hitSlop={12}
+          onPress={() => void TrackPlayer.skipToNext()}
+          style={styles.controlButton}
+        >
+          <SymbolView name="forward.fill" size={20} tintColor={colors.text} />
         </Pressable>
       </Pressable>
     </View>
@@ -65,6 +84,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 8,
     right: 8,
+    zIndex: 10,
   },
   inner: {
     flexDirection: 'row',
@@ -100,7 +120,7 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     fontSize: 12,
   },
-  playButton: {
+  controlButton: {
     width: 36,
     height: 36,
     alignItems: 'center',

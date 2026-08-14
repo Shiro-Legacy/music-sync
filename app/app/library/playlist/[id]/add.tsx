@@ -3,9 +3,11 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useActiveTrack } from 'react-native-track-player';
 
 import { addTracksToPlaylist, listSongs, playlistTracks } from '../../../../src/db/queries';
 import { EmptyState } from '../../../../src/ui/EmptyState';
+import { MINI_PLAYER_HEIGHT } from '../../../../src/ui/MiniPlayer';
 import { colors } from '../../../../src/ui/theme';
 
 function parsePlaylistId(value: string | undefined): number | null {
@@ -17,6 +19,7 @@ function parsePlaylistId(value: string | undefined): number | null {
 export default function AddSongsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const activeTrack = useActiveTrack();
   const { id: idParam } = useLocalSearchParams<{ id: string }>();
   const id = parsePlaylistId(idParam);
   const [search, setSearch] = useState('');
@@ -96,7 +99,15 @@ export default function AddSongsScreen() {
           );
         }}
       />
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+      <View
+        style={[
+          styles.footer,
+          {
+            paddingBottom:
+              Math.max(insets.bottom, 12) + (activeTrack === undefined ? 0 : MINI_PLAYER_HEIGHT),
+          },
+        ]}
+      >
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ disabled: selected.size === 0 }}

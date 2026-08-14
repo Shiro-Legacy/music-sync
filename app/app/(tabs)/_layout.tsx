@@ -1,7 +1,6 @@
 import { Tabs } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { MiniPlayer } from '../../src/ui/MiniPlayer';
 import { colors } from '../../src/ui/theme';
 
 function TabGlyph({ glyph, color }: { glyph: string; color: string }) {
@@ -54,7 +53,6 @@ export default function TabsLayout() {
           }}
         />
       </Tabs>
-      <MiniPlayer />
     </View>
   );
 }

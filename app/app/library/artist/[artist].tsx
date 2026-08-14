@@ -78,7 +78,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   listContent: {
-    paddingBottom: 60,
+    paddingBottom: 140,
   },
   albumRow: {
     flexDirection: 'row',
