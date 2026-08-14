@@ -24,6 +24,9 @@ appId: com.jiaqi.musicsync
     timeout: 5000
 # tap the bar (not a button) -> full player opens
 - tapOn: "Now playing Longer Tone.*"
+# The full player exposes a unique "Close player" dismiss control — this
+# proves the navigation happened ("Longer Tone" alone is already visible in
+# the mini player and would false-pass).
 - extendedWaitUntil:
-    visible: "Longer Tone"
+    visible: "Close player"
     timeout: 5000

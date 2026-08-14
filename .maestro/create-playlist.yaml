@@ -1,12 +1,15 @@
 appId: com.jiaqi.musicsync
 ---
-# m138 diagnosis: does creating a playlist refresh the list?
+# Regression: creating a playlist refreshes the list immediately.
+# NAME must be unique per run (the runner passes a timestamped value, or use
+# `maestro test -e NAME="<unique>" .maestro/create-playlist.yaml`).
 - launchApp
 - extendedWaitUntil:
     visible: "Library"
     timeout: 20000
 - tapOn: "Playlists, tab, 2 of 4"
-- assertVisible: ".*New Playlist"
+# Precondition: the name must not already exist, or this would false-pass.
+- assertNotVisible: "${NAME}.*"
 - tapOn: ".*New Playlist"
 - extendedWaitUntil:
     visible: "Empty playlist"
@@ -15,8 +18,9 @@ appId: com.jiaqi.musicsync
 - extendedWaitUntil:
     visible: "OK"
     timeout: 5000
-- inputText: "Maestro Test"
+- inputText: "${NAME}"
 - tapOn: "OK"
+# Row renders as "<name>, N songs · M min, ›" — match by prefix.
 - extendedWaitUntil:
-    visible: "Maestro Test"
+    visible: "${NAME}.*"
     timeout: 6000

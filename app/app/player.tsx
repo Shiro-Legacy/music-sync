@@ -44,7 +44,13 @@ export default function PlayerScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 24 }]}>
-      <Pressable hitSlop={12} onPress={() => router.back()} style={styles.dismiss}>
+      <Pressable
+        hitSlop={12}
+        onPress={() => router.back()}
+        style={styles.dismiss}
+        accessibilityRole="button"
+        accessibilityLabel="Close player"
+      >
         <SymbolView name="chevron.down" size={22} tintColor={colors.textDim} weight="semibold" />
       </Pressable>
 
