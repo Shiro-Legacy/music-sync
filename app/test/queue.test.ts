@@ -2,13 +2,50 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ServerConfig, TrackRow } from '../src/db/queries';
 
-const trackPlayer = vi.hoisted(() => ({
-  add: vi.fn<(tracks: unknown[]) => Promise<void>>(),
-  play: vi.fn<() => Promise<void>>(),
-  reset: vi.fn<() => Promise<void>>(),
-  skip: vi.fn<(index: number) => Promise<void>>(),
-  updateOptions: vi.fn<(options: unknown) => Promise<void>>(),
-}));
+type PlayerTrack = { id: string; url: string };
+
+const trackPlayer = vi.hoisted(() => {
+  let queue: PlayerTrack[] = [];
+  let active: number | undefined;
+
+  const api = {
+    add: vi.fn(async (tracks: PlayerTrack[]) => {
+      queue = queue.concat(tracks);
+      if (active === undefined && queue.length > 0) active = 0;
+    }),
+    play: vi.fn(async () => undefined),
+    reset: vi.fn(async () => {
+      queue = [];
+      active = undefined;
+    }),
+    skip: vi.fn(async (index: number) => {
+      active = index;
+    }),
+    updateOptions: vi.fn(async () => undefined),
+    getActiveTrackIndex: vi.fn(async () => active),
+    getQueue: vi.fn(async () => queue),
+    remove: vi.fn(async (indexes: number[]) => {
+      const drop = new Set(indexes);
+      const current = active === undefined ? undefined : queue[active];
+      queue = queue.filter((_, i) => !drop.has(i));
+      if (current === undefined) {
+        active = queue.length > 0 ? 0 : undefined;
+        return;
+      }
+      const next = queue.findIndex((track) => track.id === current.id);
+      active = next >= 0 ? next : queue.length > 0 ? 0 : undefined;
+    }),
+    removeUpcomingTracks: vi.fn(async () => {
+      if (active === undefined) {
+        queue = [];
+        return;
+      }
+      queue = queue.slice(0, active + 1);
+    }),
+    _state: () => ({ queue: [...queue], active }),
+  };
+  return api;
+});
 
 const paths = vi.hoisted(() => ({
   localArtworkUri: vi.fn(() => null),
@@ -27,7 +64,8 @@ vi.mock('../src/api/client', () => ({
 vi.mock('../src/db/queries', () => ({ getServerConfig: vi.fn(() => null) }));
 vi.mock('../src/sync/paths', () => paths);
 
-import { playContext, toPlayerTrack } from '../src/player/queue';
+import { playContext, toPlayerTrack, toggleShuffle } from '../src/player/queue';
+import { usePlayerStore } from '../src/store/playerStore';
 
 function track(id: string): TrackRow {
   return {
@@ -53,14 +91,16 @@ function track(id: string): TrackRow {
   };
 }
 
+function addedIds(): string[] {
+  const last = trackPlayer.add.mock.calls.at(-1)?.[0] as Array<{ id: string }> | undefined;
+  return last?.map((item) => item.id) ?? [];
+}
+
 describe('playContext', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    trackPlayer.reset.mockResolvedValue(undefined);
-    trackPlayer.add.mockResolvedValue(undefined);
-    trackPlayer.skip.mockResolvedValue(undefined);
-    trackPlayer.play.mockResolvedValue(undefined);
-    trackPlayer.updateOptions.mockResolvedValue(undefined);
+    usePlayerStore.setState({ shuffle: false });
+    await trackPlayer.reset();
   });
 
   it('re-asserts remote-control capabilities after loading the queue', async () => {
@@ -89,6 +129,99 @@ describe('playContext', () => {
     expect(trackPlayer.skip.mock.invocationCallOrder[0]).toBeLessThan(
       trackPlayer.play.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('turns shuffle on, randomizes the list, and starts at the first shuffled item', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    await playContext([track('a'), track('b'), track('c')], 2, { shuffle: true });
+
+    expect(usePlayerStore.getState().shuffle).toBe(true);
+    expect(trackPlayer.skip).not.toHaveBeenCalled();
+    expect(new Set(addedIds())).toEqual(new Set(['a', 'b', 'c']));
+    expect(addedIds()).not.toEqual(['a', 'b', 'c']);
+    random.mockRestore();
+  });
+
+  it('keeps the tapped track first when shuffle is already on', async () => {
+    usePlayerStore.setState({ shuffle: true });
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    await playContext([track('a'), track('b'), track('c')], 1);
+
+    expect(addedIds()[0]).toBe('b');
+    expect(new Set(addedIds())).toEqual(new Set(['a', 'b', 'c']));
+    expect(trackPlayer.skip).not.toHaveBeenCalled();
+    random.mockRestore();
+  });
+
+  it('turns shuffle off and plays in the given order', async () => {
+    usePlayerStore.setState({ shuffle: true });
+
+    await playContext([track('a'), track('b'), track('c')], 1, { shuffle: false });
+
+    expect(usePlayerStore.getState().shuffle).toBe(false);
+    expect(addedIds()).toEqual(['a', 'b', 'c']);
+    expect(trackPlayer.skip).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('toggleShuffle', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    usePlayerStore.setState({ shuffle: false });
+    await trackPlayer.reset();
+  });
+
+  it('turns on around the current track, including already-played songs', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    await playContext([track('a'), track('b'), track('c')], 1);
+    trackPlayer.add.mockClear();
+    trackPlayer.remove.mockClear();
+    trackPlayer.removeUpcomingTracks.mockClear();
+
+    await toggleShuffle();
+
+    expect(usePlayerStore.getState().shuffle).toBe(true);
+    expect(trackPlayer.remove).toHaveBeenCalledWith([0]);
+    expect(trackPlayer.removeUpcomingTracks).toHaveBeenCalledOnce();
+    expect(new Set(addedIds())).toEqual(new Set(['a', 'c']));
+    expect(trackPlayer._state().queue.map((item) => item.id)).toEqual(['b', 'c', 'a']);
+    expect(trackPlayer._state().active).toBe(0);
+    random.mockRestore();
+  });
+
+  it('still reshuffles when the current track is the last in the queue', async () => {
+    await playContext([track('a'), track('b'), track('c')], 2);
+    trackPlayer.add.mockClear();
+
+    await toggleShuffle();
+
+    expect(usePlayerStore.getState().shuffle).toBe(true);
+    expect(new Set(addedIds())).toEqual(new Set(['a', 'b']));
+    expect(trackPlayer._state().queue[0]?.id).toBe('c');
+    expect(trackPlayer._state().queue).toHaveLength(3);
+  });
+
+  it('restores the leftover original order when turning off', async () => {
+    await playContext([track('a'), track('b'), track('c')], 1);
+    await toggleShuffle();
+    trackPlayer.add.mockClear();
+    trackPlayer.remove.mockClear();
+
+    await toggleShuffle();
+
+    expect(usePlayerStore.getState().shuffle).toBe(false);
+    expect(addedIds()).toEqual(['c']);
+    expect(trackPlayer._state().queue.map((item) => item.id)).toEqual(['b', 'c']);
+    expect(trackPlayer._state().active).toBe(0);
+  });
+
+  it('updates the flag even when nothing is playing yet', async () => {
+    await toggleShuffle();
+
+    expect(usePlayerStore.getState().shuffle).toBe(true);
+    expect(trackPlayer.removeUpcomingTracks).not.toHaveBeenCalled();
   });
 });
 

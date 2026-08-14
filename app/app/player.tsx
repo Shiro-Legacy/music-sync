@@ -10,7 +10,8 @@ import TrackPlayer, {
   useProgress,
 } from 'react-native-track-player';
 
-import { shuffleRemaining } from '../src/player/queue';
+import { toggleShuffle } from '../src/player/queue';
+import { usePlayerStore } from '../src/store/playerStore';
 import { SeekBar } from '../src/ui/SeekBar';
 import { colors, formatDuration } from '../src/ui/theme';
 
@@ -22,6 +23,7 @@ export default function PlayerScreen() {
   const track = useActiveTrack();
   const { playing } = useIsPlaying();
   const progress = useProgress(250);
+  const shuffle = usePlayerStore((s) => s.shuffle);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>(RepeatMode.Off);
   const [scrubSeconds, setScrubSeconds] = useState<number | null>(null);
 
@@ -78,8 +80,14 @@ export default function PlayerScreen() {
       </View>
 
       <View style={styles.controls}>
-        <Pressable hitSlop={10} onPress={() => void shuffleRemaining()} style={styles.sideButton}>
-          <SymbolView name="shuffle" size={22} tintColor={colors.textDim} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={shuffle ? 'Turn shuffle off' : 'Turn shuffle on'}
+          hitSlop={10}
+          onPress={() => void toggleShuffle()}
+          style={styles.sideButton}
+        >
+          <SymbolView name="shuffle" size={22} tintColor={shuffle ? colors.accent : colors.textDim} />
         </Pressable>
         <Pressable hitSlop={10} onPress={() => void TrackPlayer.skipToPrevious()}>
           <SymbolView name="backward.fill" size={32} tintColor={colors.text} />

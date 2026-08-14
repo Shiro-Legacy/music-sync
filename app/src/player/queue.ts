@@ -1,7 +1,8 @@
-import TrackPlayer, { type AddTrack } from 'react-native-track-player';
+import TrackPlayer, { type AddTrack, type Track } from 'react-native-track-player';
 
 import { authHeaders, trackUrl } from '../api/client';
 import { getServerConfig, type ServerConfig, type TrackRow } from '../db/queries';
+import { usePlayerStore } from '../store/playerStore';
 import { localArtworkUri, resolveLocalUri } from '../sync/paths';
 import { assertCapabilities } from './setup';
 
@@ -42,9 +43,84 @@ function shuffled<T>(items: readonly T[]): T[] {
   return out;
 }
 
+function trackId(track: Track | AddTrack | undefined): string | undefined {
+  if (track === undefined) return undefined;
+  const id = track.id;
+  return typeof id === 'string' && id !== '' ? id : undefined;
+}
+
+function sameTrack(a: Track | AddTrack | undefined, b: Track | AddTrack | undefined): boolean {
+  const idA = trackId(a);
+  const idB = trackId(b);
+  if (idA !== undefined && idB !== undefined) return idA === idB;
+  return a?.url !== undefined && a.url !== '' && a.url === b?.url;
+}
+
+/** Context order from the last `playContext`, used to restore when shuffle turns off. */
+let originalQueue: AddTrack[] = [];
+
+/** Serialize RNTP queue writes so play/toggle cannot interleave. */
+let mutation: Promise<void> = Promise.resolve();
+
+function enqueue(fn: () => Promise<void>): Promise<void> {
+  const run = mutation.then(fn, fn);
+  mutation = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+function setShuffleFlag(on: boolean): void {
+  usePlayerStore.setState({ shuffle: on });
+}
+
 /**
- * Replaces the queue with `rows` and starts playing at `startIndex`
- * (or a random order when shuffle is requested).
+ * Rebuilds the native queue to `[current, ...upcoming]` without resetting
+ * playback of the current item.
+ */
+async function replaceUpcoming(upcoming: readonly AddTrack[]): Promise<void> {
+  const currentIndex = await TrackPlayer.getActiveTrackIndex();
+  if (currentIndex !== undefined && currentIndex > 0) {
+    await TrackPlayer.remove(Array.from({ length: currentIndex }, (_, i) => i));
+  }
+  await TrackPlayer.removeUpcomingTracks();
+  if (upcoming.length > 0) await TrackPlayer.add([...upcoming]);
+}
+
+async function applyShuffleKeepingCurrent(): Promise<void> {
+  const currentIndex = await TrackPlayer.getActiveTrackIndex();
+  const queue = await TrackPlayer.getQueue();
+  if (currentIndex === undefined || queue.length === 0) return;
+  const current = queue[currentIndex];
+  if (current === undefined) return;
+  if (originalQueue.length === 0) originalQueue = [...queue];
+  const rest = originalQueue.filter((track) => !sameTrack(track, current));
+  if (rest.length === 0) return;
+  await replaceUpcoming(shuffled(rest));
+}
+
+async function restoreOriginalKeepingCurrent(): Promise<void> {
+  if (originalQueue.length === 0) return;
+  const currentIndex = await TrackPlayer.getActiveTrackIndex();
+  const queue = await TrackPlayer.getQueue();
+  const current = currentIndex === undefined ? undefined : queue[currentIndex];
+  if (current === undefined) return;
+  const origin = originalQueue.findIndex((track) => sameTrack(track, current));
+  const remaining =
+    origin >= 0
+      ? originalQueue.slice(origin + 1)
+      : originalQueue.filter((track) => !sameTrack(track, current));
+  await replaceUpcoming(remaining);
+}
+
+/**
+ * Replaces the queue with `rows` and starts playing at `startIndex`.
+ *
+ * - `{ shuffle: true }` turns shuffle on, randomizes the whole list, and starts at 0.
+ * - `{ shuffle: false }` turns shuffle off and plays in the given order.
+ * - omitted `shuffle` keeps the current mode. If shuffle is already on, the
+ *   selected row stays first and the rest are randomized.
  */
 export async function playContext(
   rows: readonly TrackRow[],
@@ -52,30 +128,58 @@ export async function playContext(
   opts?: { shuffle?: boolean },
 ): Promise<void> {
   if (rows.length === 0) return;
-  const cfg = getServerConfig();
-  let ordered: readonly TrackRow[] = rows;
-  let start = Math.max(0, Math.min(startIndex, rows.length - 1));
-  if (opts?.shuffle === true) {
-    ordered = shuffled(rows);
-    start = 0;
-  }
-  await TrackPlayer.reset();
-  await TrackPlayer.add(ordered.map((row) => toPlayerTrack(row, cfg)));
-  // Adding to an empty RNTP queue already selects index 0; avoid a redundant native skip.
-  if (start > 0) await TrackPlayer.skip(start);
-  await TrackPlayer.play();
-  // Now that a current track exists, re-assert remote-control capabilities —
-  // the startup application is a no-op while the queue is empty.
-  await assertCapabilities();
+  return enqueue(async () => {
+    const cfg = getServerConfig();
+    const mapped = rows.map((row) => toPlayerTrack(row, cfg));
+    originalQueue = mapped;
+
+    let ordered: readonly AddTrack[] = mapped;
+    let start = Math.max(0, Math.min(startIndex, mapped.length - 1));
+
+    if (opts?.shuffle === true) {
+      setShuffleFlag(true);
+      ordered = shuffled(mapped);
+      start = 0;
+    } else if (opts?.shuffle === false) {
+      setShuffleFlag(false);
+    } else if (usePlayerStore.getState().shuffle) {
+      const selected = mapped[start]!;
+      ordered = [selected, ...shuffled(mapped.filter((_, i) => i !== start))];
+      start = 0;
+    }
+
+    await TrackPlayer.reset();
+    await TrackPlayer.add([...ordered]);
+    // Adding to an empty RNTP queue already selects index 0; avoid a redundant native skip.
+    if (start > 0) await TrackPlayer.skip(start);
+    await TrackPlayer.play();
+    // Now that a current track exists, re-assert remote-control capabilities —
+    // the startup application is a no-op while the queue is empty.
+    await assertCapabilities();
+  });
 }
 
-/** Shuffles the not-yet-played remainder of the current queue. */
-export async function shuffleRemaining(): Promise<void> {
-  const currentIndex = await TrackPlayer.getActiveTrackIndex();
-  if (currentIndex === undefined) return;
-  const queue = await TrackPlayer.getQueue();
-  const upcoming = queue.slice(currentIndex + 1);
-  if (upcoming.length < 2) return;
-  await TrackPlayer.removeUpcomingTracks();
-  await TrackPlayer.add(shuffled(upcoming));
+/**
+ * Toggles shuffle mode. The button always updates its visual state; the queue
+ * is rewritten around the current track when one exists.
+ *
+ * On: keep the current track playing and randomize every other item from the
+ * original context (including already-played tracks), so shuffle still does
+ * something on the last song.
+ * Off: restore the leftover original context order after the current track.
+ */
+export async function toggleShuffle(): Promise<void> {
+  const next = !usePlayerStore.getState().shuffle;
+  setShuffleFlag(next);
+  return enqueue(async () => {
+    // A later playContext may have already applied the desired mode.
+    if (usePlayerStore.getState().shuffle !== next) return;
+    try {
+      if (next) await applyShuffleKeepingCurrent();
+      else await restoreOriginalKeepingCurrent();
+    } catch (error) {
+      if (usePlayerStore.getState().shuffle === next) setShuffleFlag(!next);
+      throw error;
+    }
+  });
 }
