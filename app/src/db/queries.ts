@@ -283,7 +283,7 @@ export function listPlaylists(): PlaylistSummary[] {
      LEFT JOIN playlist_tracks pt ON pt.playlistId = p.id
      LEFT JOIN tracks t ON t.id = pt.trackId
      GROUP BY p.id, p.name
-     ORDER BY p.updatedAt DESC, p.id DESC`,
+     ORDER BY p.createdAt ASC, p.id ASC`,
   );
 }
 
