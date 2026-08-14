@@ -70,7 +70,7 @@ Testing on the Simulator: the Simulator shares the Mac's network, so it can reac
 
 ## Local playlists
 
-The iPhone app includes local-only playlists in the **Playlists** tab. Create, rename, or delete a playlist, search your library to add multiple songs, add every matching song at once, or create a playlist from songs that are in no playlist yet. Remove songs, then play or shuffle using the same offline-first player as the main library. Playlist data is stored on the phone and is not sent to the desktop server.
+The iPhone app includes local-only playlists in the **Playlists** tab. Create, rename, or delete a playlist. New Playlist can start empty or fill with songs that are in no playlist yet. Search your library to add songs that are not already in that playlist, or add every matching song at once. Remove songs, then play or shuffle using the same offline-first player as the main library. Playlist data is stored on the phone and is not sent to the desktop server.
 
 Playlists keep their records when the local library is wiped, but their song entries are removed with the corresponding local track rows; sync can repopulate the library afterward.
 

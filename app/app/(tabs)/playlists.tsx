@@ -51,7 +51,7 @@ export default function PlaylistsScreen() {
     );
   };
 
-  const create = () => {
+  const createEmpty = () => {
     promptForName('New Playlist', '', (name) => {
       createPlaylist(name);
       refresh();
@@ -66,8 +66,8 @@ export default function PlaylistsScreen() {
     }
     const noun = unsorted.length === 1 ? 'song' : 'songs';
     Alert.prompt(
-      'New from unsorted',
-      `${unsorted.length} ${noun} not in any playlist.`,
+      'New Playlist',
+      `Add ${unsorted.length} ${noun} not in any playlist?`,
       (value) => {
         const name = value.trim();
         if (name === '') {
@@ -83,6 +83,25 @@ export default function PlaylistsScreen() {
       },
       'plain-text',
       'Unsorted',
+    );
+  };
+
+  const create = () => {
+    const unsortedCount = listUnplaylistedTracks().length;
+    const noun = unsortedCount === 1 ? 'song' : 'songs';
+    Alert.alert(
+      'New Playlist',
+      unsortedCount === 0 ? undefined : `${unsortedCount} ${noun} are not in any playlist.`,
+      [
+        {
+          text: 'Empty playlist',
+          onPress: createEmpty,
+        },
+        ...(unsortedCount === 0
+          ? []
+          : [{ text: 'Add unsorted songs', onPress: createFromUnsorted }]),
+        { text: 'Cancel', style: 'cancel' as const },
+      ],
     );
   };
 
@@ -118,13 +137,6 @@ export default function PlaylistsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.toolbar}>
-        <Pressable
-          accessibilityRole="button"
-          onPress={createFromUnsorted}
-          style={({ pressed }) => [styles.newButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.newButtonLabel}>New from unsorted</Text>
-        </Pressable>
         <Pressable
           accessibilityRole="button"
           onPress={create}
@@ -168,10 +180,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   toolbar: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    flexWrap: 'wrap',
-    gap: 8,
+    alignItems: 'flex-end',
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 6,
