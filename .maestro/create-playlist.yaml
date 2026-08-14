@@ -1,0 +1,26 @@
+appId: com.jiaqi.musicsync
+---
+# Regression: creating a playlist refreshes the list immediately.
+# NAME must be unique per run (the runner passes a timestamped value, or use
+# `maestro test -e NAME="<unique>" .maestro/create-playlist.yaml`).
+- launchApp
+- extendedWaitUntil:
+    visible: "Library"
+    timeout: 20000
+- tapOn: "Playlists, tab, 2 of 4"
+# Precondition: the name must not already exist, or this would false-pass.
+- assertNotVisible: "${NAME}.*"
+- tapOn: ".*New Playlist"
+- extendedWaitUntil:
+    visible: "Empty playlist"
+    timeout: 5000
+- tapOn: "Empty playlist"
+- extendedWaitUntil:
+    visible: "OK"
+    timeout: 5000
+- inputText: "${NAME}"
+- tapOn: "OK"
+# Row renders as "<name>, N songs · M min, ›" — match by prefix.
+- extendedWaitUntil:
+    visible: "${NAME}.*"
+    timeout: 6000
