@@ -27,6 +27,26 @@ First run prints a QR code and pairing token. Scan the QR with the app's pairing
 
 When Windows Firewall prompts on first listen, allow access on **Private** networks. Tip: give the desktop a DHCP reservation in your router so its IP (baked into the pairing) doesn't drift.
 
+## Multiple people on one server
+
+MusicSync can host multiple isolated libraries from one server process. Each library has its own music folder, pairing token, server identity, and index, so a phone paired to one library cannot browse or download another library. Existing single-library configurations migrate automatically; the existing token and phone pairing continue to work.
+
+Add a library and print its pairing information:
+
+```bash
+npm run server -- --add-library alice --music-dir "D:\\Music\\Alice"
+npm run server -- --pair --library alice
+```
+
+Repeat `--add-library` for each person. Scan each person's QR code with their phone. Use these commands to inspect or manage libraries:
+
+```bash
+npm run server -- --status
+npm run server -- --remove-library alice
+```
+
+`--remove-library` removes only the library from the server configuration; its music and index files are left untouched. With multiple libraries, pass `--library <name>` when pairing or changing a music directory. A bare `--music-dir` remains supported when the server has exactly one library.
+
 ## Building the app (Mac)
 
 Day-to-day TypeScript/UI work runs anywhere; anything iOS-native needs the Mac.

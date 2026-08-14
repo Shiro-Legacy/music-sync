@@ -4,26 +4,49 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ManifestSchema, PingResponseSchema, type TrackEntry } from '@music-sync/shared';
-import { buildServer, type ServerDeps } from '../src/http.js';
+import { buildServer, digestToken, type ServerDeps } from '../src/http.js';
 
 const TOKEN = 'testtokenABCDEF123456789';
+const TOKEN_B = 'second-library-token-987654321';
 const TRACK_SIZE = 4096;
+const TRACK_SIZE_B = 2048;
 const CONTENT_KEY = 'cafebabecafebabecafebabecafebabecafebabe';
+const CONTENT_KEY_B = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+const ARTWORK_ID = '0123456789abcdef0123456789abcdef01234567';
 
 let dir: string;
 let trackFile: string;
+let trackFileB: string;
+let artworkFile: string;
+let artworkFileB: string;
 let trackBody: Buffer;
+let trackBodyB: Buffer;
+let artworkBody: Buffer;
+let artworkBodyB: Buffer;
 let entry: TrackEntry;
+let entryB: TrackEntry;
 let app: FastifyInstance;
 
 const auth = { authorization: `Bearer ${TOKEN}` };
+const authB = { authorization: `Bearer ${TOKEN_B}` };
 
 beforeAll(async () => {
   dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'msync-http-'));
   trackBody = Buffer.alloc(TRACK_SIZE);
   for (let i = 0; i < TRACK_SIZE; i += 1) trackBody[i] = (i * 7 + 3) % 256;
-  trackFile = path.join(dir, 'song.mp3');
-  await fsp.writeFile(trackFile, trackBody);
+  trackBodyB = Buffer.alloc(TRACK_SIZE_B, 0xb2);
+  artworkBody = Buffer.from('artwork from alice');
+  artworkBodyB = Buffer.from('artwork from bob');
+  trackFile = path.join(dir, 'alice-song.mp3');
+  trackFileB = path.join(dir, 'bob-song.mp3');
+  artworkFile = path.join(dir, 'alice-artwork.jpg');
+  artworkFileB = path.join(dir, 'bob-artwork.jpg');
+  await Promise.all([
+    fsp.writeFile(trackFile, trackBody),
+    fsp.writeFile(trackFileB, trackBodyB),
+    fsp.writeFile(artworkFile, artworkBody),
+    fsp.writeFile(artworkFileB, artworkBodyB),
+  ]);
 
   entry = {
     id: 'track-1',
@@ -32,22 +55,53 @@ beforeAll(async () => {
     mtimeMs: 1111,
     contentKey: CONTENT_KEY,
     format: 'mp3',
-    title: 'Song',
-    artist: 'Artist',
+    title: 'Alice song',
+    artist: 'Alice',
     album: 'Album',
     durationSec: 12.5,
+    artworkId: ARTWORK_ID,
+  };
+  entryB = {
+    id: 'track-1',
+    path: 'Other/Album/song.mp3',
+    size: TRACK_SIZE_B,
+    mtimeMs: 2222,
+    contentKey: CONTENT_KEY_B,
+    format: 'mp3',
+    title: 'Bob song',
+    artist: 'Bob',
+    album: 'Album',
+    durationSec: 8,
+    artworkId: ARTWORK_ID,
   };
 
   const deps: ServerDeps = {
-    serverId: 'srv-test',
     name: 'TestPC',
     version: '9.9.9',
-    token: TOKEN,
-    getRev: () => 5,
-    getTracks: () => [entry],
-    getTrackById: (id) => (id === entry.id ? entry : undefined),
-    getTrackFilePath: () => trackFile,
-    getArtwork: () => undefined,
+    libraries: [
+      {
+        name: 'alice',
+        serverId: 'srv-alice',
+        tokenDigest: digestToken(TOKEN),
+        getRev: () => 5,
+        getTracks: () => [entry],
+        getTrackById: (id) => (id === entry.id ? entry : undefined),
+        getTrackFilePath: () => trackFile,
+        getArtwork: (id) =>
+          id === ARTWORK_ID ? { filePath: artworkFile, mime: 'image/jpeg' } : undefined,
+      },
+      {
+        name: 'bob',
+        serverId: 'srv-bob',
+        tokenDigest: digestToken(TOKEN_B),
+        getRev: () => 9,
+        getTracks: () => [entryB],
+        getTrackById: (id) => (id === entryB.id ? entryB : undefined),
+        getTrackFilePath: () => trackFileB,
+        getArtwork: (id) =>
+          id === ARTWORK_ID ? { filePath: artworkFileB, mime: 'image/png' } : undefined,
+      },
+    ],
   };
   app = await buildServer(deps);
 });
@@ -79,13 +133,27 @@ describe('auth', () => {
     expect(trackRes.statusCode).toBe(401);
   });
 
-  it('leaves ping open for pairing diagnostics', async () => {
+  it('leaves ping open and defaults to the first library without a valid token', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/v1/ping' });
     expect(res.statusCode).toBe(200);
     const body = PingResponseSchema.parse(res.json());
-    expect(body.serverId).toBe('srv-test');
+    expect(body.serverId).toBe('srv-alice');
     expect(body.name).toBe('TestPC');
     expect(body.version).toBe('9.9.9');
+
+    const unknown = await app.inject({
+      method: 'GET',
+      url: '/api/v1/ping',
+      headers: { authorization: 'Bearer unknown-token' },
+    });
+    expect(unknown.statusCode).toBe(200);
+    expect(PingResponseSchema.parse(unknown.json()).serverId).toBe('srv-alice');
+  });
+
+  it('returns the matched library serverId when ping has a valid bearer token', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/ping', headers: authB });
+    expect(res.statusCode).toBe(200);
+    expect(PingResponseSchema.parse(res.json()).serverId).toBe('srv-bob');
   });
 });
 
@@ -130,7 +198,7 @@ describe('manifest', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers.etag).toBe('"rev-5"');
     const manifest = ManifestSchema.parse(res.json());
-    expect(manifest.serverId).toBe('srv-test');
+    expect(manifest.serverId).toBe('srv-alice');
     expect(manifest.rev).toBe(5);
     expect(manifest.tracks).toHaveLength(1);
     expect(manifest.tracks[0]!.id).toBe('track-1');
@@ -153,6 +221,61 @@ describe('manifest', () => {
       headers: { ...auth, 'if-none-match': '"rev-4"' },
     });
     expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('multi-library isolation', () => {
+  it('serves each library manifest and colliding track id from its own token', async () => {
+    const manifestA = await app.inject({ method: 'GET', url: '/api/v1/manifest', headers: auth });
+    const manifestB = await app.inject({ method: 'GET', url: '/api/v1/manifest', headers: authB });
+
+    expect(manifestA.statusCode).toBe(200);
+    expect(manifestB.statusCode).toBe(200);
+    const bodyA = ManifestSchema.parse(manifestA.json());
+    const bodyB = ManifestSchema.parse(manifestB.json());
+    expect(bodyA.serverId).toBe('srv-alice');
+    expect(bodyA.rev).toBe(5);
+    expect(bodyA.tracks).toHaveLength(1);
+    expect(bodyA.tracks[0]!.title).toBe('Alice song');
+    expect(bodyB.serverId).toBe('srv-bob');
+    expect(bodyB.rev).toBe(9);
+    expect(bodyB.tracks).toHaveLength(1);
+    expect(bodyB.tracks[0]!.title).toBe('Bob song');
+
+    const trackA = await app.inject({ method: 'GET', url: '/api/v1/tracks/track-1', headers: auth });
+    const trackB = await app.inject({ method: 'GET', url: '/api/v1/tracks/track-1', headers: authB });
+    expect(trackA.statusCode).toBe(200);
+    expect(trackB.statusCode).toBe(200);
+    expect(trackA.headers.etag).toBe(`"${CONTENT_KEY}"`);
+    expect(trackB.headers.etag).toBe(`"${CONTENT_KEY_B}"`);
+    expect(trackA.rawPayload.equals(trackBody)).toBe(true);
+    expect(trackB.rawPayload.equals(trackBodyB)).toBe(true);
+  });
+
+  it('isolates artwork lookup by library and rejects unknown tokens', async () => {
+    const artworkA = await app.inject({
+      method: 'GET',
+      url: `/api/v1/artwork/${ARTWORK_ID}`,
+      headers: auth,
+    });
+    const artworkB = await app.inject({
+      method: 'GET',
+      url: `/api/v1/artwork/${ARTWORK_ID}`,
+      headers: authB,
+    });
+    expect(artworkA.statusCode).toBe(200);
+    expect(artworkB.statusCode).toBe(200);
+    expect(artworkA.headers['content-type']).toBe('image/jpeg');
+    expect(artworkB.headers['content-type']).toBe('image/png');
+    expect(artworkA.rawPayload.equals(artworkBody)).toBe(true);
+    expect(artworkB.rawPayload.equals(artworkBodyB)).toBe(true);
+
+    const unknown = await app.inject({
+      method: 'GET',
+      url: `/api/v1/artwork/${ARTWORK_ID}`,
+      headers: { authorization: 'Bearer unknown-token' },
+    });
+    expect(unknown.statusCode).toBe(401);
   });
 });
 
@@ -263,7 +386,7 @@ describe('artwork', () => {
   it('returns 404 for a well-formed but unknown artwork id', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/artwork/0123456789abcdef0123456789abcdef01234567',
+      url: '/api/v1/artwork/fedcba9876543210fedcba9876543210fedcba98',
       headers: auth,
     });
     expect(res.statusCode).toBe(404);

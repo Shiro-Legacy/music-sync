@@ -1,7 +1,7 @@
 import os from 'node:os';
 import qrcode from 'qrcode-terminal';
 import type { QrPayload } from '@music-sync/shared';
-import type { ServerConfig } from './config.js';
+import type { LibraryConfig, ServerConfig } from './config.js';
 
 /** Non-internal IPv4 addresses of this machine, i.e. where LAN clients can reach us. */
 export function lanIpv4Addresses(): string[] {
@@ -19,7 +19,7 @@ export function formatTokenForEntry(token: string): string {
   return token.match(/.{1,4}/g)?.join(' ') ?? token;
 }
 
-export function printPairing(config: ServerConfig): void {
+export function printPairing(config: ServerConfig, library: LibraryConfig): void {
   const addresses = lanIpv4Addresses();
   console.log('');
   console.log('=== Pair your iPhone ===');
@@ -36,7 +36,7 @@ export function printPairing(config: ServerConfig): void {
         v: 1,
         host,
         port: config.port,
-        token: config.token,
+        token: library.token,
         name: config.name,
       };
       console.log('');
@@ -44,6 +44,7 @@ export function printPairing(config: ServerConfig): void {
       qrcode.generate(JSON.stringify(payload), { small: true });
     }
   }
-  console.log(`Manual pairing token: ${formatTokenForEntry(config.token)}`);
+  console.log(`Library: ${library.name}`);
+  console.log(`Manual pairing token: ${formatTokenForEntry(library.token)}`);
   console.log('');
 }
