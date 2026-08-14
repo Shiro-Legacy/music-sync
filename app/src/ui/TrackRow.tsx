@@ -21,15 +21,21 @@ export function TrackRow({
   active = false,
   showArtist = true,
   onPress,
+  onLongPress,
 }: {
   track: TrackRowData;
   active?: boolean;
   showArtist?: boolean;
   onPress: () => void;
+  onLongPress?: () => void;
 }) {
   const badge = stateBadge(track.state);
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+    >
       {track.trackNo !== null && !showArtist ? (
         <Text style={styles.trackNo}>{track.trackNo}</Text>
       ) : null}

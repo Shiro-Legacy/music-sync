@@ -68,6 +68,12 @@ There are two app variants (`APP_VARIANT=dev` → `com.jiaqi.musicsync.dev` with
 
 Testing on the Simulator: the Simulator shares the Mac's network, so it can reach the Windows server directly. Background downloads, background audio, and BGTaskScheduler behavior need the physical iPhone.
 
+## Local playlists
+
+The iPhone app includes local-only playlists in the **Playlists** tab. Create, rename, or delete a playlist, search your synced library to add multiple songs, remove songs, and play or shuffle the playlist using the same offline-first player as the main library. Playlist data is stored on the phone and is not sent to the desktop server.
+
+Playlists keep their records when the local library is wiped, but their song entries are removed with the corresponding local track rows; sync can repopulate the library afterward.
+
 ## Development
 
 ```bash
