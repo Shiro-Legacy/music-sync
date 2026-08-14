@@ -32,6 +32,7 @@ import {
   ensureDirs,
   musicDir,
   pathToUri,
+  resolveLocalUri,
   trackDestinationPath,
   trackFileUri,
 } from './paths';
@@ -165,12 +166,13 @@ function applyMove(fromId: string, toId: string): 'moved' | 'needs-download' {
   const fromRow = byId(fromId);
   const toRow = byId(toId);
   if (toRow === null) return 'needs-download';
-  if (fromRow === null || fromRow.localUri === null) {
+  const srcUri = fromRow === null ? null : resolveLocalUri(fromRow);
+  if (fromRow === null || srcUri === null) {
     deleteRows(fromRow === null ? [] : [fromId]);
     return 'needs-download';
   }
   try {
-    const src = new File(fromRow.localUri);
+    const src = new File(srcUri);
     if (!src.exists) throw new Error('source file missing');
     const dest = new File(trackFileUri(toRow));
     if (dest.exists && dest.uri !== src.uri) dest.delete();
@@ -187,9 +189,10 @@ function applyMove(fromId: string, toId: string): 'moved' | 'needs-download' {
 function applyDeletions(ids: readonly string[]): void {
   for (const id of ids) {
     const row = byId(id);
-    if (row?.localUri != null) {
+    const uri = row === null ? null : resolveLocalUri(row);
+    if (uri !== null) {
       try {
-        const file = new File(row.localUri);
+        const file = new File(uri);
         if (file.exists) file.delete();
       } catch {
         // best effort — the row goes away regardless

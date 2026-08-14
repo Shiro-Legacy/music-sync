@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { TrackRow } from '../src/db/queries';
+import type { ServerConfig, TrackRow } from '../src/db/queries';
 
 const trackPlayer = vi.hoisted(() => ({
   add: vi.fn<(tracks: unknown[]) => Promise<void>>(),
@@ -9,15 +9,20 @@ const trackPlayer = vi.hoisted(() => ({
   skip: vi.fn<(index: number) => Promise<void>>(),
 }));
 
+const paths = vi.hoisted(() => ({
+  localArtworkUri: vi.fn(() => null),
+  resolveLocalUri: vi.fn((row: { id: string }): string | null => `file:///current/${row.id}.mp3`),
+}));
+
 vi.mock('react-native-track-player', () => ({ default: trackPlayer }));
 vi.mock('../src/api/client', () => ({
   authHeaders: vi.fn(() => ({})),
-  trackUrl: vi.fn(() => ''),
+  trackUrl: vi.fn((_cfg: unknown, id: string) => `http://server/tracks/${id}`),
 }));
 vi.mock('../src/db/queries', () => ({ getServerConfig: vi.fn(() => null) }));
-vi.mock('../src/sync/paths', () => ({ localArtworkUri: vi.fn(() => null) }));
+vi.mock('../src/sync/paths', () => paths);
 
-import { playContext } from '../src/player/queue';
+import { playContext, toPlayerTrack } from '../src/player/queue';
 
 function track(id: string): TrackRow {
   return {
@@ -67,5 +72,21 @@ describe('playContext', () => {
     expect(trackPlayer.skip.mock.invocationCallOrder[0]).toBeLessThan(
       trackPlayer.play.mock.invocationCallOrder[0]!,
     );
+  });
+});
+
+describe('toPlayerTrack', () => {
+  const cfg = { host: 'server', port: 5299, token: 't' } as ServerConfig;
+
+  it('plays from the re-resolved local uri, not the stale db value', () => {
+    // iOS moves the app container on reinstall; the db's localUri is stale.
+    expect(toPlayerTrack(track('a'), cfg).url).toBe('file:///current/a.mp3');
+  });
+
+  it('falls back to streaming when the local file is missing on disk', () => {
+    paths.resolveLocalUri.mockReturnValueOnce(null);
+    const mapped = toPlayerTrack(track('a'), cfg);
+    expect(mapped.url).toBe('http://server/tracks/a');
+    expect(mapped.headers).toBeDefined();
   });
 });

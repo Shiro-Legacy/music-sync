@@ -2,7 +2,7 @@ import TrackPlayer, { type AddTrack } from 'react-native-track-player';
 
 import { authHeaders, trackUrl } from '../api/client';
 import { getServerConfig, type ServerConfig, type TrackRow } from '../db/queries';
-import { localArtworkUri } from '../sync/paths';
+import { localArtworkUri, resolveLocalUri } from '../sync/paths';
 
 /**
  * Maps a db row to an RNTP track. Synced tracks play from the local file;
@@ -10,10 +10,11 @@ import { localArtworkUri } from '../sync/paths';
  * supports `headers` for remote URLs).
  */
 export function toPlayerTrack(row: TrackRow, cfg: ServerConfig | null): AddTrack {
-  const isLocal = row.state === 'synced' && row.localUri !== null;
+  const localUri = row.state === 'synced' ? resolveLocalUri(row) : null;
+  const isLocal = localUri !== null;
   const track: AddTrack = {
     id: row.id,
-    url: isLocal && row.localUri !== null ? row.localUri : cfg !== null ? trackUrl(cfg, row.id) : '',
+    url: isLocal ? localUri : cfg !== null ? trackUrl(cfg, row.id) : '',
     title: row.title,
     artist: row.artist,
     album: row.album,
