@@ -43,6 +43,9 @@ export default function RootLayout() {
           headerStyle: { backgroundColor: colors.bg },
           headerTintColor: colors.text,
           contentStyle: { backgroundColor: colors.bg },
+          // Detail screens are reachable from several tabs, so a text back
+          // label would often name the wrong origin — chevron only.
+          headerBackButtonDisplayMode: 'minimal',
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
