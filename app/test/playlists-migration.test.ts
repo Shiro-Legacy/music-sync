@@ -100,10 +100,22 @@ beforeAll(async () => {
   schema.runMigrations();
 });
 
-describe('playlist migration from schema version 1', () => {
-  it('preserves existing tracks and key-value data while reaching version 2', () => {
+describe('migrations from schema version 1', () => {
+  it('adds the loudness columns (version 3) with nulls for existing rows', () => {
+    const columns = schema.db
+      .getAllSync<{ name: string }>('PRAGMA table_info(tracks)')
+      .map(({ name }) => name);
+    expect(columns).toEqual(expect.arrayContaining(['loudness', 'truePeak']));
+    const row = schema.db.getFirstSync<{ loudness: number | null; truePeak: number | null }>(
+      'SELECT loudness, truePeak FROM tracks WHERE id = ?',
+      'legacy-track',
+    );
+    expect(row).toEqual({ loudness: null, truePeak: null });
+  });
+
+  it('preserves existing tracks and key-value data while reaching the current version', () => {
     const version = schema.db.getFirstSync<{ user_version: number }>('PRAGMA user_version');
-    expect(version?.user_version).toBe(2);
+    expect(version?.user_version).toBe(3);
 
     const track = schema.db.getFirstSync<{ id: string; title: string }>(
       'SELECT id, title FROM tracks WHERE id = ?',

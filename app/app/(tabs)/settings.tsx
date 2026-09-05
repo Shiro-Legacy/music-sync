@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import TrackPlayer from 'react-native-track-player';
 
 import {
@@ -10,6 +10,8 @@ import {
   syncedBytes,
   type ServerConfig,
 } from '../../src/db/queries';
+import { setVolumeLeveling } from '../../src/player/volume';
+import { usePlayerStore } from '../../src/store/playerStore';
 import { wipeLocalLibrary } from '../../src/sync/engine';
 import { colors, formatBytes } from '../../src/ui/theme';
 
@@ -32,6 +34,7 @@ export default function SettingsScreen() {
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
   const [bytes, setBytes] = useState(0);
   const [trackCount, setTrackCount] = useState(0);
+  const leveling = usePlayerStore((s) => s.leveling);
 
   const refresh = useCallback(() => {
     setCfg(getServerConfig());
@@ -98,6 +101,26 @@ export default function SettingsScreen() {
         </View>
       </View>
 
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Playback</Text>
+        <View style={styles.switchRow}>
+          <View style={styles.switchText}>
+            <Text style={styles.kvValue}>Volume leveling</Text>
+            <Text style={styles.dim}>
+              Plays every song at the same loudness using the level measured by your server.
+            </Text>
+          </View>
+          <Switch
+            accessibilityLabel="Volume leveling"
+            value={leveling}
+            onValueChange={(on) => {
+              void setVolumeLeveling(on);
+            }}
+            trackColor={{ true: colors.accent }}
+          />
+        </View>
+      </View>
+
       {age !== null && (
         <View style={[styles.card, age.days > RESIGN_WARNING_DAYS && styles.warningCard]}>
           <Text style={styles.cardTitle}>App build</Text>
@@ -157,6 +180,15 @@ const styles = StyleSheet.create({
   },
   kvList: {
     gap: 6,
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  switchText: {
+    flex: 1,
+    gap: 2,
   },
   kvRow: {
     flexDirection: 'row',

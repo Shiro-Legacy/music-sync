@@ -22,6 +22,8 @@ const trackPlayer = vi.hoisted(() => {
       active = index;
     }),
     updateOptions: vi.fn(async () => undefined),
+    setVolume: vi.fn(async () => undefined),
+    getActiveTrack: vi.fn(async () => (active === undefined ? undefined : queue[active])),
     getActiveTrackIndex: vi.fn(async () => active),
     getQueue: vi.fn(async () => queue),
     remove: vi.fn(async (indexes: number[]) => {
@@ -61,13 +63,19 @@ vi.mock('../src/api/client', () => ({
   authHeaders: vi.fn(() => ({})),
   trackUrl: vi.fn((_cfg: unknown, id: string) => `http://server/tracks/${id}`),
 }));
-vi.mock('../src/db/queries', () => ({ getServerConfig: vi.fn(() => null) }));
+vi.mock('../src/db/queries', () => ({
+  getServerConfig: vi.fn(() => null),
+  getVolumeLeveling: vi.fn(() => true),
+  setVolumeLeveling: vi.fn(),
+}));
 vi.mock('../src/sync/paths', () => paths);
 
+import { levelingVolume } from '../src/player/loudness';
 import { clearQueue, playContext, toPlayerTrack, toggleShuffle } from '../src/player/queue';
+import { setVolumeLeveling } from '../src/player/volume';
 import { usePlayerStore } from '../src/store/playerStore';
 
-function track(id: string): TrackRow {
+function track(id: string, loudness: number | null = null): TrackRow {
   return {
     id,
     path: `${id}.mp3`,
@@ -84,6 +92,8 @@ function track(id: string): TrackRow {
     durationSec: 60,
     size: 1,
     artworkId: null,
+    loudness,
+    truePeak: null,
     state: 'synced',
     localUri: `file:///${id}.mp3`,
     errorCount: 0,
@@ -112,6 +122,27 @@ describe('playContext', () => {
     expect(trackPlayer.play.mock.invocationCallOrder[0]).toBeLessThan(
       trackPlayer.updateOptions.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('levels the starting track before play, using its loudness', async () => {
+    usePlayerStore.setState({ leveling: true });
+    await playContext([track('quiet', -20), track('loud', -6)], 1);
+
+    expect(trackPlayer.setVolume).toHaveBeenCalledOnce();
+    expect(trackPlayer.setVolume).toHaveBeenCalledWith(levelingVolume(-6, true));
+    expect(trackPlayer.setVolume.mock.invocationCallOrder[0]).toBeLessThan(
+      trackPlayer.play.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('plays at unity when leveling is off, and re-levels the active track on toggle', async () => {
+    usePlayerStore.setState({ leveling: false });
+    await playContext([track('loud', -6)], 0);
+    expect(trackPlayer.setVolume).toHaveBeenLastCalledWith(1);
+
+    await setVolumeLeveling(true);
+    expect(usePlayerStore.getState().leveling).toBe(true);
+    expect(trackPlayer.setVolume).toHaveBeenLastCalledWith(levelingVolume(-6, true));
   });
 
   it('plays the first track without redundantly skipping to index zero', async () => {

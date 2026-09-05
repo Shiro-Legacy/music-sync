@@ -9,6 +9,8 @@ export interface WatcherContext {
   artwork: ArtworkStore;
   parse?: MetadataParser;
   log?: (message: string) => void;
+  /** Called after a file was (re-)indexed — hooks the background loudness pass. */
+  onIndexed?: () => void;
 }
 
 function isErrno(err: unknown, code: string): boolean {
@@ -40,6 +42,7 @@ export function startWatcher(musicDir: string, context: WatcherContext): FSWatch
           store.bumpRev();
           store.schedulePersist();
           log(`indexed ${relPath} (rev ${store.rev})`);
+          context.onIndexed?.();
         }
       } catch (err) {
         if (isErrno(err, 'ENOENT')) {

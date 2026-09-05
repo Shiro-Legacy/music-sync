@@ -22,6 +22,10 @@ export interface TrackRow {
   durationSec: number;
   size: number;
   artworkId: string | null;
+  /** Server-measured EBU R128 integrated loudness (LUFS); null until the server has measured it. */
+  loudness: number | null;
+  /** Server-measured true peak (dBTP); null until measured. */
+  truePeak: number | null;
   state: LocalTrackState;
   localUri: string | null;
   errorCount: number;
@@ -70,9 +74,11 @@ export function upsertFromManifest(tracks: readonly TrackEntry[]): void {
   db.withTransactionSync(() => {
     const stmt = db.prepareSync(
       `INSERT INTO tracks (id, path, contentKey, format, title, artist, albumArtist, album,
-                           trackNo, discNo, year, genre, durationSec, size, artworkId, state, updatedAt)
+                           trackNo, discNo, year, genre, durationSec, size, artworkId,
+                           loudness, truePeak, state, updatedAt)
        VALUES ($id, $path, $contentKey, $format, $title, $artist, $albumArtist, $album,
-               $trackNo, $discNo, $year, $genre, $durationSec, $size, $artworkId, 'queued', $updatedAt)
+               $trackNo, $discNo, $year, $genre, $durationSec, $size, $artworkId,
+               $loudness, $truePeak, 'queued', $updatedAt)
        ON CONFLICT(id) DO UPDATE SET
          path = excluded.path,
          contentKey = excluded.contentKey,
@@ -88,6 +94,8 @@ export function upsertFromManifest(tracks: readonly TrackEntry[]): void {
          durationSec = excluded.durationSec,
          size = excluded.size,
          artworkId = excluded.artworkId,
+         loudness = excluded.loudness,
+         truePeak = excluded.truePeak,
          updatedAt = excluded.updatedAt`,
     );
     try {
@@ -108,6 +116,8 @@ export function upsertFromManifest(tracks: readonly TrackEntry[]): void {
           $durationSec: t.durationSec,
           $size: t.size,
           $artworkId: t.artworkId ?? null,
+          $loudness: t.loudness ?? null,
+          $truePeak: t.truePeak ?? null,
           $updatedAt: now,
         });
       }
@@ -374,6 +384,17 @@ export function kvSet(key: string, value: string): void {
     key,
     value,
   );
+}
+
+const VOLUME_LEVELING_KEY = 'volumeLeveling';
+
+/** Volume leveling preference (see src/player/loudness.ts). Defaults to on. */
+export function getVolumeLeveling(): boolean {
+  return kvGet(VOLUME_LEVELING_KEY) !== 'off';
+}
+
+export function setVolumeLeveling(on: boolean): void {
+  kvSet(VOLUME_LEVELING_KEY, on ? 'on' : 'off');
 }
 
 export function kvDelete(key: string): void {

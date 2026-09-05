@@ -52,6 +52,10 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX idx_playlist_tracks_pos ON playlist_tracks(playlistId, position);
   `,
+  `
+  ALTER TABLE tracks ADD COLUMN loudness REAL;
+  ALTER TABLE tracks ADD COLUMN truePeak REAL;
+  `,
 ];
 
 let migrated = false;

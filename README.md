@@ -18,6 +18,8 @@ app/      Expo SDK 57 app: expo-router UI, react-native-track-player, background
 
 ## Running the server (Windows desktop, where the music is)
 
+Install ffmpeg first so the server can measure loudness for [volume leveling](#volume-leveling) (`winget install Gyan.FFmpeg` on Windows, `brew install ffmpeg` on Mac; it must be on `PATH`). Without it everything still works, just without leveling.
+
 ```bash
 npm install
 npm run server -- --music-dir "D:\Music"
@@ -74,10 +76,18 @@ The iPhone app includes local-only playlists in the **Playlists** tab. Create, r
 
 Playlists keep their records when the local library is wiped, but their song entries are removed with the corresponding local track rows; sync can repopulate the library afterward.
 
+## Volume leveling
+
+Every song plays at the same loudness, replacing the LocalMusic pipeline that re-encoded files with ffmpeg `loudnorm`. Files are never rewritten; the server measures and the phone applies the gain.
+
+- **Server** (`server/src/loudness.ts`): after every scan and watcher change, a background pass measures each playable track that has no `loudness` yet with `ffmpeg -af ebur128=peak=true` (two at a time, a few seconds per track) and writes EBU R128 integrated `loudness` (LUFS) and `truePeak` (dBTP) into the index and manifest. Serving never waits for it: partial results are published as a rev bump at most once a minute plus one at the end. A re-indexed file (size/mtime changed) is re-measured. Files ffmpeg cannot read are skipped until the next server start. `--status` shows coverage as `measured/playable`.
+- **Phone** (`app/src/player/loudness.ts`, `volume.ts`): the loudness rides on each player track, and every track change sets the player volume to `10^((-18 - loudness) / 20)`, clamped to 1. That is the LocalMusic target of -14 LUFS minus 4 dB of headroom: a volume control can only attenuate, and a survey of the real libraries (median -9 LUFS, 5th percentile -17) showed 4 dB fully levels ~97% of tracks. So a -8 LUFS track plays at 0.32, a -18 LUFS track at 1.0, unmeasured tracks are treated as -14, and the whole library comes out ~4 dB quieter than raw playback — turn the phone up once. Settings → Playback → **Volume leveling** turns it off (kv `volumeLeveling`) and re-levels the current track immediately.
+- **Why not rewrite the audio like LocalMusic did:** its players were third-party, so the bytes had to change. Here the player is ours, so measuring (ReplayGain-style) keeps files byte-identical: no generation loss on lossy rips, lossless stays lossless, track ids and content keys do not move, and enabling leveling on an existing library costs one manifest refresh instead of re-downloading everything. Revisit `HEADROOM_DB` if the library drifts much quieter than -18 LUFS (re-survey with `ffmpeg -af ebur128`). Album-aware leveling (one shared gain per album) is not implemented; the libraries are single rips without album tags.
+
 ## Development
 
 ```bash
-npm test              # vitest: shared diff suite + server suite
+npm test              # vitest: shared diff suite + server suite (incl. loudness) + app suite (queue, playlists, leveling)
 npm run typecheck     # tsc across workspaces
 npm run server        # tsx watch mode
 cd app && npx expo start   # Metro for the dev-client variant

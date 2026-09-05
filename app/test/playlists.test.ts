@@ -118,7 +118,7 @@ function insertTrack(id: string, title: string, durationSec: number): void {
 describe('playlist database migration', () => {
   it('reaches schema version 2 and creates playlist tables', () => {
     const version = schema.db.getFirstSync<{ user_version: number }>('PRAGMA user_version');
-    expect(version?.user_version).toBe(2);
+    expect(version?.user_version).toBe(3);
 
     const tables = schema.db.getAllSync<{ name: string }>(
       `SELECT name FROM sqlite_master

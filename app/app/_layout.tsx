@@ -5,6 +5,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { runMigrations } from '../src/db/schema';
 import { setupPlayerOnce } from '../src/player/setup';
+import { initVolumeLeveling } from '../src/player/volume';
 import { registerBackgroundSync } from '../src/sync/background';
 import { initSyncEngine, runSync } from '../src/sync/engine';
 import { initTriggers } from '../src/sync/triggers';
@@ -30,6 +31,7 @@ export default function RootLayout() {
   useEffect(() => {
     void (async () => {
       await setupPlayerOnce();
+      initVolumeLeveling();
       await initSyncEngine();
       initTriggers();
       await registerBackgroundSync();

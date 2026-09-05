@@ -5,6 +5,7 @@ import { getServerConfig, type ServerConfig, type TrackRow } from '../db/queries
 import { usePlayerStore } from '../store/playerStore';
 import { localArtworkUri, resolveLocalUri } from '../sync/paths';
 import { assertCapabilities } from './setup';
+import { applyTrackVolume } from './volume';
 
 /**
  * Maps a db row to an RNTP track. Synced tracks play from the local file;
@@ -21,6 +22,10 @@ export function toPlayerTrack(row: TrackRow, cfg: ServerConfig | null): AddTrack
     artist: row.artist,
     album: row.album,
     duration: row.durationSec,
+    // Custom fields survive the native round-trip (iOS Track keeps the original
+    // object), so the playback service can level the volume on every track change.
+    loudness: row.loudness,
+    truePeak: row.truePeak,
   };
   if (!isLocal && cfg !== null) {
     track.headers = authHeaders(cfg);
@@ -153,6 +158,9 @@ export async function playContext(
     await TrackPlayer.add([...ordered]);
     // Adding to an empty RNTP queue already selects index 0; avoid a redundant native skip.
     if (start > 0) await TrackPlayer.skip(start);
+    // Level before the first sample plays; later tracks are leveled by the
+    // PlaybackActiveTrackChanged handler in service.ts.
+    await applyTrackVolume(ordered[start]);
     await TrackPlayer.play();
     // Now that a current track exists, re-assert remote-control capabilities —
     // the startup application is a no-op while the queue is empty.

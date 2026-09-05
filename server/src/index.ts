@@ -19,6 +19,7 @@ import {
 } from './config.js';
 import { buildServer, digestToken, type LibraryRuntime, type ServerDeps } from './http.js';
 import { scanLibrary } from './indexer.js';
+import { ffmpegAvailable, LoudnessScanner, needsLoudness } from './loudness.js';
 import { printPairing } from './pairing.js';
 import { IndexStore } from './store.js';
 import { startWatcher } from './watcher.js';
@@ -132,10 +133,13 @@ function printStatus(config: ServerConfig): void {
   const rows = config.libraries.map((library) => {
     const store = new IndexStore(libraryIndexPath(library.name));
     store.load();
+    const tracks = store.entries();
+    const playable = tracks.filter((entry) => entry.format !== 'unsupported').length;
     return {
       name: library.name,
       dir: library.musicDir,
       tracks: store.trackCount,
+      loudness: `${playable - tracks.filter(needsLoudness).length}/${playable}`,
       rev: store.rev,
     };
   });
@@ -170,6 +174,19 @@ function availableLibraries(config: ServerConfig): LibraryConfig[] {
   return available;
 }
 
+let loudnessEnabled: boolean | undefined;
+
+/** ffmpeg is optional: without it tracks are served without loudness and play at the reference level. */
+async function loudnessSupported(): Promise<boolean> {
+  if (loudnessEnabled === undefined) {
+    loudnessEnabled = await ffmpegAvailable();
+    if (!loudnessEnabled) {
+      console.warn('ffmpeg not found — loudness normalization disabled (install ffmpeg and restart to enable).');
+    }
+  }
+  return loudnessEnabled;
+}
+
 async function createRuntime(library: LibraryConfig): Promise<LibraryRuntime> {
   const store = new IndexStore(libraryIndexPath(library.name));
   store.load();
@@ -185,7 +202,20 @@ async function createRuntime(library: LibraryConfig): Promise<LibraryRuntime> {
       `(${stats.indexed} scanned, ${stats.reused} unchanged, ${stats.removed} removed) — rev ${store.rev}`,
   );
 
-  startWatcher(library.musicDir, { store, artwork });
+  const log = (message: string): void => console.log(`[${library.name}] ${message}`);
+  let scanner: LoudnessScanner | undefined;
+  if (await loudnessSupported()) {
+    scanner = new LoudnessScanner(library.musicDir, store, { log });
+    void scanner.request(); // background: serving starts now, values land as they are measured
+  }
+
+  startWatcher(library.musicDir, {
+    store,
+    artwork,
+    onIndexed: () => {
+      void scanner?.request();
+    },
+  });
 
   return {
     name: library.name,

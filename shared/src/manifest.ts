@@ -27,6 +27,14 @@ export const TrackEntrySchema = z.object({
   durationSec: z.number().nonnegative(),
   /** sha1 of the embedded artwork bytes; fetch via /api/v1/artwork/:artworkId */
   artworkId: z.string().optional(),
+  /**
+   * EBU R128 integrated loudness in LUFS (ffmpeg `ebur128`). Absent until the server has
+   * measured the file, or forever when ffmpeg is not installed. The app turns it into a
+   * per-track playback gain so every song plays at the same level (see app/src/player/loudness.ts).
+   */
+  loudness: z.number().optional(),
+  /** True peak in dBTP, measured together with `loudness`; caps the gain so boosts never clip. */
+  truePeak: z.number().optional(),
 });
 export type TrackEntry = z.infer<typeof TrackEntrySchema>;
 
