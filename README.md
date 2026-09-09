@@ -1,107 +1,463 @@
-# MusicSync — personal iPhone music player that mirrors your desktop library
+# MusicSync
+
+Personal iPhone music player that mirrors a desktop library over home Wi-Fi.
+
+**This file is the only living product document.** If another markdown file disagrees with it, this file wins. When behavior, protocol, schema, CLI, playback, sync, playlists, build, or tests change, update the matching section here in the same change. Do not add new markdown for product knowledge.
+
+`.quad/` is gitignored session scratch, not documentation. Agent process rules live in `AGENTS.md` (loaded by coding agents; `CLAUDE.md` imports it).
+
+## Contents
+
+1. [What it is](#what-it-is)
+2. [Domain vocabulary](#domain-vocabulary)
+3. [Repo layout](#repo-layout)
+4. [Protocol](#protocol)
+5. [Server](#server)
+6. [App](#app)
+7. [Sync](#sync)
+8. [Playback](#playback)
+9. [Playlists](#playlists)
+10. [Multiple libraries](#multiple-libraries)
+11. [Run the server](#run-the-server)
+12. [Build the app (Mac)](#build-the-app-mac)
+13. [Testing](#testing)
+14. [Decisions](#decisions)
+15. [Library hygiene](#library-hygiene)
+16. [Lessons](#lessons)
+17. [Current deployment](#current-deployment)
+18. [Backlog](#backlog)
+19. [Not in product](#not-in-product)
+
+## What it is
 
 A two-part personal system:
 
-- **`server/`** — a small Node.js app that runs on the Windows desktop where your music lives. It watches your music folder, indexes tags/artwork, and serves the library over your home Wi-Fi (bearer-token protected, LAN-only).
-- **`app/`** — an iPhone app (Expo / React Native) that pairs with the server by scanning a QR code, **automatically downloads your whole library for offline playback**, and is a full music player (background audio, lock-screen/Control Center/AirPods controls).
-- **`shared/`** — the contract between them: manifest schema, API routes, and the sync-diff algorithm (fully unit-tested).
+- **`server/`** — Node.js app on the machine where the music lives. Watches the music folder, indexes tags/artwork, and serves the library over LAN (bearer-token protected).
+- **`app/`** — iPhone app (Expo / React Native). Pairs by scanning a QR code or typing host, port, and token; downloads the library for offline playback; and is a full music player (background audio, Lock Screen / Control Center / AirPods).
+- **`shared/`** — the contract: manifest schema, API routes, and `computeSyncPlan()` (unit-tested).
 
-How syncing works: the server publishes a manifest of every track (id + content hash + tags). On every app open / Wi-Fi reconnect / manual refresh — plus an opportunistic iOS background task — the app diffs the manifest against its local library and downloads what's new or changed via background URLSession (downloads keep running when you leave the app). Desktop renames are detected by content hash and become local file moves, not re-downloads. Deletions mirror to the phone, with a safety valve: a change that would delete >25% of a >100-track library waits for one-tap confirmation.
+iOS does not let apps freely run in the background. Sync triggers are app open, Wi-Fi regained, manual refresh, and an OS-scheduled `BGTaskScheduler` task (typically overnight/charging — a top-up, not the backbone). In-flight downloads continue via `URLSession` when you leave the app. Practical result: open the app on home Wi-Fi and new music lands; unfinished downloads complete on their own.
+
+## Domain vocabulary
+
+Glossary only. Implementation details live in later sections.
+
+### Library
+
+A music folder the server indexes and a paired phone mirrors. One server process can host several isolated libraries; a phone paired to one library cannot see another.
+
+### Track
+
+One audio file in a library, published with tags, duration, and two identities: a location identity and a bytes identity.
+
+### Track identity (`id`)
+
+Stable id for a track's location: SHA-1 of the relative path from the music root, using forward slashes. Renaming or moving the file mints a new identity and retires the old one.
+
+### Content key
+
+Identity of the file bytes: SHA-1 of the first 64 KB + last 64 KB + ASCII file size (files under 128 KB hash the whole file + size once). Tag edits, re-encodes, and replacements change the content key even when the path (and therefore the track identity) stays the same.
+
+Casual talk of "id" can mean either. They are distinct. A tag edit changes the content key and keeps the track identity.
+
+### Manifest
+
+The server's published snapshot of a library: server identity, a monotonic revision, and every track's identities plus tags. The phone diffs this against its local copy to decide what to download, move, or delete.
+
+### Rename rescue
+
+When a desktop file is renamed, the old path disappears and a new path appears with the same content key. Sync moves the already-downloaded local file to the new identity instead of deleting it and downloading again. Only fully `synced` local files are eligible.
+
+### Unknown Artist
+
+The artist string the indexer publishes when a file has no artist tag. It is a fallback display value, not a real artist.
+
+### Loudness
+
+Per-track EBU R128 integrated loudness (LUFS) and true peak (dBTP), measured by the server with ffmpeg and published in the manifest. The phone turns it into a playback gain so every song plays at the same level. Absent until measured, or when the server has no ffmpeg.
+
+### Server identity (`serverId`)
+
+Per-library UUID minted at first run / `--add-library`. The app pins it at pairing and refuses manifests from a different identity.
 
 ## Repo layout
 
+npm workspaces. Always `npm install` at the **repo root**, never inside `app/`.
+
 ```
-shared/   manifest + protocol schemas, computeSyncPlan() diff (vitest-tested)
-server/   Fastify server: indexer, chokidar watcher, Range streaming, QR pairing
-app/      Expo SDK 57 app: expo-router UI, react-native-track-player, background downloader
+shared/    manifest + protocol schemas, computeSyncPlan()  (vitest)
+server/    Fastify: indexer, chokidar watcher, Range streaming, QR pairing
+app/       Expo SDK 57 app: expo-router UI, RNTP, background downloader
+app/modules/backup-exclusion/  local Expo module (autolinked pod) that excludes Music/ and Artwork/ from iCloud backup
+tools/     throwaway library fixtures + HTTP protocol smoke
+scripts/   Maestro iOS runner
+.maestro/  Maestro flows (Release simulator, not the dev client)
 ```
 
-## Running the server (Windows desktop, where the music is)
+`app/ios/` is gitignored and generated by `npx expo prebuild`. Never hand-edit it expecting it to survive. Native configuration lives in `app/app.config.ts`.
 
-Install ffmpeg first so the server can measure loudness for [volume leveling](#volume-leveling) (`winget install Gyan.FFmpeg` on Windows, `brew install ffmpeg` on Mac; it must be on `PATH`). Without it everything still works, just without leveling.
+## Protocol
+
+Defined in `shared/src/`. Default port **5299**. API version 1.
+
+| Route | Auth | Notes |
+|---|---|---|
+| `GET /api/v1/ping` | optional bearer | Pairing diagnostics. With a valid token, `serverId` is that library's; otherwise the first library's. |
+| `GET /api/v1/manifest` | required | ETag `"rev-N"`; `If-None-Match` → 304. |
+| `GET /api/v1/tracks/:id` | required | Range requests; ETag is the content key; `If-Match` → 412 on mismatch. Path is never derived from user input — lookup by id only. |
+| `GET /api/v1/artwork/:artworkId` | required | 40-hex SHA-1 only; immutable cache. |
+
+Every request is LAN-only (loopback, RFC1918, link-local, IPv6 ULA/link-local). Non-LAN → 403. Missing/wrong bearer on authenticated routes → 401. Token compare is timing-safe SHA-256 digest match against each library.
+
+QR payload (`v: 1`): `{ host, port, token, name }`. `name` is the **host** name, not the library name.
+
+Playable formats (AVPlayer-native): `mp3`, `flac`, `m4a`, `alac`, `aac`, `wav`, `aiff`. Indexed but marked `unsupported`: `ogg`, `opus`, `wma`, `mka`, `webm`. The phone only syncs playable tracks.
+
+## Server
+
+Config and indexes live in `~/.music-sync/` (override with `MUSIC_SYNC_DATA_DIR`).
+
+```
+~/.music-sync/config.json          v2: port, host name, libraries[]
+~/.music-sync/index-<name>.json    per-library track index
+~/.music-sync/artwork/             shared, content-addressed artwork
+```
+
+Each library has `name` (`[a-z0-9][a-z0-9-]*`), `musicDir`, `token`, `serverId`. v1 configs (no `v` field) migrate automatically to one library named `default`, keeping token and serverId so existing pairings survive. Legacy `index.json` is renamed to `index-default.json`.
+
+Indexer: reuse an existing entry when size + mtime are unchanged; otherwise recompute content key and tags (and drop the loudness, which is re-measured). Missing artist → `Unknown Artist`; missing title → filename stem. `.m4a` with an ALAC codec is published as `alac`. Watcher is chokidar. Track bytes are streamed with Range; gzip is not applied to track/artwork (it would break Range).
+
+Loudness (`server/src/loudness.ts`): after every scan and watcher change, a background pass measures each playable track that has no `loudness` yet with `ffmpeg -af ebur128=peak=true` (two at a time, a few seconds per track) and writes `loudness` / `truePeak` into the entry. Serving never waits for it: the manifest is published immediately, partial results are pushed as a rev bump at most once a minute, and one final bump when the pass ends. ffmpeg is optional — without it the server warns once and tracks simply have no loudness. Files ffmpeg cannot read are skipped until the next server start. `--status` shows coverage as `measured/playable`.
+
+`--remove-library` drops the library from config only. Music files and the index file stay on disk. The last library cannot be removed.
+
+## App
+
+Expo SDK 57, React Native 0.86.2, iOS only.
+
+Two variants, selected by `APP_VARIANT` in `app/app.config.ts`:
+
+| | Release (default) | Dev (`APP_VARIANT=dev`) |
+|---|---|---|
+| Name | MusicSync | MusicSync (Dev) |
+| Bundle id | `com.jiaqi.musicsync` | `com.jiaqi.musicsync.dev` |
+| JS | embedded Release bundle | Metro / expo-dev-client |
+
+`ios/` holds **one variant at a time**. Switching variants means a clean prebuild with the right env var. Signing team is `appleTeamId: BK5VXTTH6P` (Personal Team, 7-day free profiles).
+
+### Navigation
+
+Root stack (`app/app/_layout.tsx`): `(tabs)`, full-screen `/player` modal (gestures off — a sheet pull-down cancels seek-bar drags), `/pair` modal. Migrations run at module load before any screen touches SQLite.
+
+Tabs: **Library** (Artists / Albums / Songs), **Playlists**, **Sync**, **Settings**. Library detail routes live on the root stack: `/library/artist/[artist]`, `/library/album/[key]`, `/library/playlist/[id]`, `/library/playlist/[id]/add`.
+
+Mini player mounts once in the root layout. Visible on tab routes and `/library/*` when a track is loaded and not dismissed. Hidden on `/player` and `/pair`. Swipe left clears the queue. Tap the bar (not its buttons) opens the full player. Play/pause and skip-next are nested pressables.
+
+### Database
+
+`expo-sqlite`, WAL, `PRAGMA foreign_keys = ON`. `MIGRATIONS` is append-only; `PRAGMA user_version` tracks how many have run.
+
+1. `tracks` + `kv` (pairing, ETag/rev, held deletions).
+2. `playlists` + `playlist_tracks` (PK `(playlistId, trackId)` — a track appears at most once per playlist; `ON DELETE CASCADE` from both playlist and track).
+
+Library data and playlists live in SQLite, not Zustand. Zustand holds live sync progress (`syncStore`) and player chrome flags (`playerStore`: `shuffle`, `dismissed`). Screens refresh on focus; after mutations bump local state so memoized queries rerun.
+
+Wiping the local library deletes track rows (cascade removes playlist entries) but keeps pairing metadata and playlist records.
+
+### Storage
+
+Downloaded audio lives in `Documents/Music/<id>.<ext>` and artwork in `Documents/Artwork/<artworkId>`. Both directories are excluded from iCloud backup. The SQLite `localUri` column records the absolute file URI at download time, but iOS rotates the app-container UUID on reinstall, so that prefix goes stale — playback always resolves `<id>.<ext>` against the current container (`resolveLocalUri` in `app/src/sync/paths.ts`). A same-bundle-id re-sign or update keeps the library; deleting the app does not.
+
+## Sync
+
+`shared/src/diff.ts` → `computeSyncPlan(manifestTracks, localTracks)`:
+
+- same id, different content key → re-download
+- known id, not `synced` → re-enqueue
+- new id with a synced local file of the same content key → **rename rescue** (move)
+- otherwise new id → download
+- local id absent from manifest and not rescued → delete
+
+Mass-delete valve: if the local library has more than 100 tracks and the plan would delete more than 25%, `deletionsHeld` is true. Downloads and moves still apply; deletions wait for one-tap confirm (`applyHeldDeletions`) or dismiss.
+
+Triggers (`app/src/sync/triggers.ts`, `background.ts`):
+
+- foreground (app active), throttled to 60s
+- Wi-Fi reconnect
+- manual refresh
+- `BGTaskScheduler` (`music-sync-background`, minimumInterval 60 — iOS decides when)
+
+Downloads use `@kesha-antonov/react-native-background-downloader` (URLSession). A track fails after 3 errors. Artwork is fetched separately into the app container.
+
+## Playback
+
+`react-native-track-player` **4.1.2** via RN 0.86's legacy NativeModule interop. iOS only. See [Decisions](#decisions).
+
+- Entry (`app/index.ts`) registers the playback service **before** expo-router loads.
+- `setupPlayerOnce` uses `IOSCategory.Playback` and capabilities play / pause / next / previous / seek. Capabilities must be re-asserted after the queue has a current track (`assertCapabilities` from `playContext`) or Lock Screen controls stay dead.
+- `playContext(rows, index, { shuffle? })` is the only queue boundary. It resets RNTP, maps rows (`synced` → local file, else authenticated LAN URL), then plays. Adding to an empty queue already selects index 0 — do not `skip(0)`.
+- Shuffle is a persistent mode in `playerStore`. On: keep current, randomize the rest of the original context (including already-played, so shuffle still does something on the last song). Off: restore leftover original order after the current track. Queue writes are serialized (`enqueue`) so play/toggle cannot interleave.
+- Repeat cycles Off → Queue → Track on the full player.
+- Remote events (Lock Screen / Control Center / interruption duck) live in `app/src/player/service.ts`.
+- **Volume leveling** (`app/src/player/loudness.ts`, `volume.ts`): the loudness the server measured rides on each RNTP track (`toPlayerTrack`), and `PlaybackActiveTrackChanged` sets the player volume to `10^((-18 - loudness) / 20)`, clamped to 1. Target is -14 LUFS (LocalMusic parity) minus 4 dB headroom: a volume control can only attenuate, and a survey of the real libraries (533 tracks, median -9.4 LUFS, 5th percentile -17.3) showed 4 dB fully levels 97% of tracks. A -8 LUFS track plays at 0.32, a -18 LUFS track at 1.0, unmeasured tracks are treated as -14, and the whole library comes out ~4 dB quieter than raw playback. `playContext` levels the first track before `play()`. Settings → Playback → Volume leveling toggles it (kv `volumeLeveling`, default on) and re-levels the current track immediately.
+- `UIBackgroundModes: ['audio']`. Local Network permission is required to reach the server (`NSAllowsLocalNetworking` for cleartext LAN HTTP).
+
+## Playlists
+
+Local-only. Never sent to the server.
+
+- Create / rename / delete. **＋ New Playlist** offers Empty playlist, or Add unsorted songs when any track is in no playlist (default name `Unsorted`).
+- Listed in creation order (new at the bottom). Subtitle is `N songs · M min` under an hour, `N songs · X hr` at ≥ 1 hour.
+- Detail: play / shuffle via `playContext` in displayed order; add songs (search + multi-select + **Add all (N)** of the current filter; confirm when N > 50); long-press a row to remove. Already-in-playlist tracks are excluded. Inserts `INSERT OR IGNORE` and append after `MAX(position)`.
+- Unsorted = `NOT EXISTS` against `playlist_tracks`, ordered `title COLLATE NOCASE` like the Songs tab. A song in any playlist is not unsorted.
+- After `Alert.prompt` create/rename, refresh immediately **and** again after 400ms. Device-only: iOS 18 can swallow a repaint that lands during keyboard/alert teardown. The simulator does not reproduce this. See [Lessons](#lessons).
+
+## Multiple libraries
+
+One process, N isolated libraries. A token only ever sees its own library. Track ids can collide across libraries (id = SHA-1 of relative path) — lookup is always per-library.
+
+```bash
+npm run server -- --add-library alice --music-dir "D:\\Music\\Alice"
+npm run server -- --pair --library alice
+npm run server -- --status
+npm run server -- --remove-library alice
+```
+
+With more than one library, `--pair` and `--music-dir` require `--library <name>`. A bare `--music-dir` still works when there is exactly one.
+
+The root `npm run server` wrapper goes through `tsx watch` and has mangled library flags (`--add-library` dropped, process hangs). For any flagged invocation use `npm -C server start -- <flags>`. `--pair` is safe while a server is already running: it prints the QR and exits without binding the port.
+
+## Run the server
+
+Where the music lives (Windows desktop or any machine on the LAN). Install ffmpeg first for volume leveling (`brew install ffmpeg` on Mac, `winget install Gyan.FFmpeg` on Windows; it must be on `PATH`):
 
 ```bash
 npm install
 npm run server -- --music-dir "D:\Music"
 ```
 
-First run prints a QR code and pairing token. Scan the QR with the app's pairing screen. Useful flags: `--pair` (re-print the QR), `--status`, `--port`. To start automatically at login: `server/scripts/install-autostart.ps1`.
+First run prints a QR and pairing token. Scan it from the app's pairing screen. Useful flags: `--pair` (re-print QR), `--status`, `--port`. Windows autostart at login: `server/scripts/install-autostart.ps1`.
 
-When Windows Firewall prompts on first listen, allow access on **Private** networks. Tip: give the desktop a DHCP reservation in your router so its IP (baked into the pairing) doesn't drift.
+When Windows Firewall prompts, allow **Private** networks. Give the desktop a DHCP reservation so the IP baked into the pairing QR does not drift.
 
-## Multiple people on one server
-
-MusicSync can host multiple isolated libraries from one server process. Each library has its own music folder, pairing token, server identity, and index, so a phone paired to one library cannot browse or download another library. Existing single-library configurations migrate automatically; the existing token and phone pairing continue to work.
-
-Add a library and print its pairing information:
+Protocol smoke against real files:
 
 ```bash
-npm run server -- --add-library alice --music-dir "D:\\Music\\Alice"
-npm run server -- --pair --library alice
+node tools/make-fixtures.mjs D:\tmp\musictest
+npm run server -- --music-dir D:\tmp\musictest
+node tools/smoke.mjs http://localhost:5299 <token>
 ```
 
-Repeat `--add-library` for each person. Scan each person's QR code with their phone. Use these commands to inspect or manage libraries:
+Omit the path to write a fresh temp dir. Fixtures are tagged MP3s plus an unsupported `.ogg`, a `.txt`, and a nested folder. Exit 0 with all `PASS` means the HTTP protocol works. `MUSIC_SYNC_URL` / `MUSIC_SYNC_TOKEN` are accepted instead of args.
+
+## Build the app (Mac)
+
+The Mac is for iOS builds and signing. Day-to-day TypeScript/UI work can run anywhere. Simulator is fine for UI; background downloads, background audio, BGTaskScheduler, and Lock Screen controls need a physical iPhone.
+
+Requirements: **macOS 26.2+**, **Xcode 26.4+**, **Node 22.13+**, CocoaPods. Watchman is not needed on SDK 57.
+
+### One-time Mac prep
+
+1. Install **Xcode** from the Mac App Store (~10 GB). If that copy fails, download from https://developer.apple.com/xcode/. Launch it once, accept the license, install additional components.
+2. Xcode → Settings → Locations → set Command Line Tools (or `xcode-select --install`). This also provides `git`.
+3. Xcode → Settings → Components → install the iOS Simulator runtime.
+4. Install Homebrew if needed, then Node and CocoaPods:
+
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   brew install node cocoapods
+   node --version   # must be >= 22.13
+   ```
+
+   Expo SDK 57 still uses CocoaPods; `npx expo run:ios` runs `pod install` but `pod` itself must exist.
+5. Clone the repo and `npm install` at the **repo root**.
+
+### Simulator (no signing)
 
 ```bash
-npm run server -- --status
-npm run server -- --remove-library alice
-```
-
-`--remove-library` removes only the library from the server configuration; its music and index files are left untouched. With multiple libraries, pass `--library <name>` when pairing or changing a music directory. A bare `--music-dir` remains supported when the server has exactly one library.
-
-## Building the app (Mac)
-
-Day-to-day TypeScript/UI work runs anywhere; anything iOS-native needs the Mac.
-
-```bash
-git clone <this repo> && cd <repo>
-npm install
 cd app
-npx expo prebuild -p ios --clean     # generates ios/ (not committed)
-npx expo run:ios                     # Simulator, for UI work
-npx expo run:ios --device --configuration Release   # install on the iPhone
+npx expo prebuild -p ios --clean     # generates ios/ (not committed); --clean is explicit, SDK 57 cleans by default
+npx expo run:ios                     # Debug Simulator + Metro; first compile 10–20 min
 ```
 
-First device install only: open `app/ios` in Xcode once and set Signing → Team to your Personal Team for both targets, then on the iPhone trust the certificate (Settings → General → VPN & Device Management).
+No `APP_VARIANT` → release-variant identity (`com.jiaqi.musicsync`) in a Debug build. Fine as a toolchain smoke test.
 
-**Free Apple ID note:** the signing profile expires every **7 days** — the app stops launching until you rerun the Release install (same one-liner, ~5 min; your synced music survives because the bundle ID is unchanged). The Settings screen shows build age and warns after day 5. Joining the Apple Developer Program ($99/yr) extends this to a year and unlocks cloud builds (EAS) with no Mac in the loop.
+### First iPhone install (Release)
 
-There are two app variants (`APP_VARIANT=dev` → `com.jiaqi.musicsync.dev` with a dev client for Metro; default → the standalone Release app you actually use).
+1. USB cable, unlock, tap **Trust**. Then Settings → Privacy & Security → **Developer Mode** on (the row appears only after a Mac with Xcode has talked to the phone) → restart → confirm.
+2. Xcode → Settings → Accounts → add your free Apple ID. Team is "Your Name (Personal Team)".
+3. `cd app && npx expo run:ios --device --configuration Release` (`--device` with no argument picks from a list). Release embeds the JS bundle; no Metro needed.
+4. If signing fails ("requires a development team"), `open ios/MusicSync.xcworkspace`, select the MusicSync target → Signing & Capabilities → Automatically manage signing → Personal Team. `appleTeamId: BK5VXTTH6P` is already in `app.config.ts`, so a later clean prebuild should keep the team. Close Xcode and rerun the CLI command.
+5. On the phone: Settings → General → **VPN & Device Management** → Developer App → Trust. Then allow **Local Network** on first launch (or Settings → Privacy & Security → Local Network → MusicSync).
+6. Run the [playback smoke](#iphone-playback-smoke) before treating the install as done.
 
-Testing on the Simulator: the Simulator shares the Mac's network, so it can reach the Windows server directly. Background downloads, background audio, and BGTaskScheduler behavior need the physical iPhone.
+**Free Apple ID:** the signing profile expires every **7 days**. The app bounces to the home screen until you rerun the Release install (same one-liner; synced music survives because the bundle id is unchanged). Settings shows build age (`extra.buildDate`) and warns after day 5. Caps: 10 new App IDs per rolling 7 days; 3 free-provisioned apps on the device. The $99/yr Apple Developer Program extends this to a year and unlocks EAS.
 
-## Local playlists
-
-The iPhone app includes local-only playlists in the **Playlists** tab. Create, rename, or delete a playlist. New Playlist can start empty or fill with songs that are in no playlist yet. Search your library to add songs that are not already in that playlist, or add every matching song at once. Remove songs, then play or shuffle using the same offline-first player as the main library. Playlist data is stored on the phone and is not sent to the desktop server.
-
-Playlists keep their records when the local library is wiped, but their song entries are removed with the corresponding local track rows; sync can repopulate the library afterward.
-
-## Volume leveling
-
-Every song plays at the same loudness, replacing the LocalMusic pipeline that re-encoded files with ffmpeg `loudnorm`. Files are never rewritten; the server measures and the phone applies the gain.
-
-- **Server** (`server/src/loudness.ts`): after every scan and watcher change, a background pass measures each playable track that has no `loudness` yet with `ffmpeg -af ebur128=peak=true` (two at a time, a few seconds per track) and writes EBU R128 integrated `loudness` (LUFS) and `truePeak` (dBTP) into the index and manifest. Serving never waits for it: partial results are published as a rev bump at most once a minute plus one at the end. A re-indexed file (size/mtime changed) is re-measured. Files ffmpeg cannot read are skipped until the next server start. `--status` shows coverage as `measured/playable`.
-- **Phone** (`app/src/player/loudness.ts`, `volume.ts`): the loudness rides on each player track, and every track change sets the player volume to `10^((-18 - loudness) / 20)`, clamped to 1. That is the LocalMusic target of -14 LUFS minus 4 dB of headroom: a volume control can only attenuate, and a survey of the real libraries (median -9 LUFS, 5th percentile -17) showed 4 dB fully levels ~97% of tracks. So a -8 LUFS track plays at 0.32, a -18 LUFS track at 1.0, unmeasured tracks are treated as -14, and the whole library comes out ~4 dB quieter than raw playback — turn the phone up once. Settings → Playback → **Volume leveling** turns it off (kv `volumeLeveling`) and re-levels the current track immediately.
-- **Why not rewrite the audio like LocalMusic did:** its players were third-party, so the bytes had to change. Here the player is ours, so measuring (ReplayGain-style) keeps files byte-identical: no generation loss on lossy rips, lossless stays lossless, track ids and content keys do not move, and enabling leveling on an existing library costs one manifest refresh instead of re-downloading everything. Revisit `HEADROOM_DB` if the library drifts much quieter than -18 LUFS (re-survey with `ffmpeg -af ebur128`). Album-aware leveling (one shared gain per album) is not implemented; the libraries are single rips without album tags.
-
-## Development
+Weekly re-sign (iPhone plugged in, unlocked):
 
 ```bash
-npm test              # vitest: shared diff suite + server suite (incl. loudness) + app suite (queue, playlists, leveling)
+cd <repo> && git pull && npm install
+cd app && npx expo run:ios --device --configuration Release
+```
+
+Device builds: `cd app` first. Never run `expo run:ios` from the repo root.
+
+### Dev client (JS Fast Refresh)
+
+```bash
+cd app
+APP_VARIANT=dev npx expo prebuild -p ios --clean
+APP_VARIANT=dev npx expo run:ios --device
+```
+
+This overwrites `ios/` with the dev variant (a second App ID, also 7-day expiry). Metro can run on Windows: `npx expo start --dev-client --lan`. If the phone cannot see it, allow Node through the Windows firewall on **Private** networks (port 8081) and keep phone and PC on the same subnet. Rebuild the native client only when native deps or `app.config.ts` change — and weekly on the free account anyway. To ship Release again: prebuild **without** `APP_VARIANT`.
+
+### Common failures
+
+- **`pod install` fails** — `brew install cocoapods`; or delete `app/ios/` and prebuild `--clean`. After a `git pull` with mismatched Expo packages, from `app/` run `npx expo install --fix`.
+- **"Failed to register bundle identifier"** — change the id in `app.config.ts`. New id = new app; library data does not carry over.
+- **"Your maximum App ID limit has been reached"** — free accounts may create 10 App IDs per rolling 7 days. Wait it out; do not churn bundle-id suffixes.
+- **"requires a development team" after a working setup** — clean prebuild dropped the team; `appleTeamId` should prevent this.
+- **Launch bounces to home** — untrusted cert, or 7-day profile expired.
+- **Cannot reach server** — Local Network permission; same Wi-Fi/subnet; Windows firewall on the server port (Private); Simulator uses the Mac's network.
+- **Device not detected** — data-capable cable, unlocked, Trust, Developer Mode on. Check Xcode → Window → Devices and Simulators if it is stuck "preparing".
+
+## Testing
+
+```bash
+npm test              # vitest across workspaces (shared diff, server HTTP/config/indexer/loudness, app queue/playlists/leveling)
 npm run typecheck     # tsc across workspaces
-npm run server        # tsx watch mode
-cd app && npx expo start   # Metro for the dev-client variant
 ```
 
-## iOS reality check (why sync is designed foreground-first)
+CI (`.github/workflows/ci.yml`): `npm ci && npm run typecheck && npm test` on Node 24.
 
-iOS does not let apps freely run in the background at arbitrary times. Sync triggers are: app open, Wi-Fi regained, manual refresh, and an OS-scheduled `BGTaskScheduler` task that iOS typically runs overnight/charging — a top-up, not the backbone. In-flight downloads continue in the background via `URLSession` regardless. Practical result: open the app on home Wi-Fi and new music lands; anything unfinished completes on its own.
+### Maestro (simulator UI)
 
-## Pushing to GitHub (one-time)
-
-Create a **private** repo on github.com, then:
+Drives accessibility text, not coordinates. Use a **Release** simulator build — the expo-dev-client launcher makes flows flaky.
 
 ```bash
-git remote add origin git@github.com:<you>/music-sync.git
-git push -u origin main
+cd app && npx expo run:ios --configuration Release --device "iPhone 17"
+scripts/test-maestro-ios.sh
+scripts/test-maestro-ios.sh --device "iPhone 17" --flow .maestro/smoke-mini-player.yaml
 ```
+
+One-time: Maestro CLI v2.8+ via `curl -fsSL "https://get.maestro.mobile.dev" | bash` (installs to `~/.maestro/bin`; not the Homebrew cask named `maestro`), and Java 17+ (`brew install openjdk`, keg-only at `/opt/homebrew/opt/openjdk`). The runner finds Java, Maestro, and a booted simulator, and passes a unique `NAME` so create-playlist cannot false-pass on a leftover row. Without the runner: export `JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home`, put `$JAVA_HOME/bin` and `~/.maestro/bin` on `PATH`, then `maestro test -e NAME="<unique>" .maestro/create-playlist.yaml`.
+
+Flows:
+
+- `.maestro/smoke-mini-player.yaml` — Songs → play → mini-player pause/play → skip → open full player (`Close player`).
+- `.maestro/create-playlist.yaml` — Playlists → New Playlist → Empty playlist → asserts the row; also the Alert.prompt refresh regression.
+
+Accessibility conventions:
+
+- Mini-player bar: `"Now playing <title> by <artist>"`; buttons `"Pause"` / `"Play"` and `"Next song"`.
+- Full player dismiss: `"Close player"`.
+- Song rows have no explicit label; Maestro sees concatenated `"<title>, <artist>, <badge>, <duration>"`. Match with a regex (`"Long Tone.*"`), never an exact title.
+- Playlist rows concatenate to `"<name>, N songs · M min, ›"` (or `hr`). Match `"<name>.*"`, never an exact name.
+- Tabs expose `"<Name>, tab, <n> of 4"` (e.g. `"Playlists, tab, 2 of 4"`); library segments are `"Artists"` / `"Albums"` / `"Songs"`.
+- Assert absence before create (`assertNotVisible: "${NAME}.*"`).
+- `maestro hierarchy` dumps the tree when a flow stalls.
+
+### iPhone playback smoke
+
+Run after the first Release install and after upgrading React Native or `react-native-track-player`. Simulator cannot validate background audio or Control Center.
+
+Pair, sync at least two tracks, keep one stream-only if possible, watch the device console.
+
+- [ ] Synced track starts; mini-player shows metadata.
+- [ ] Pause / resume from mini-player.
+- [ ] Seek, next, previous from full player; queue and metadata follow.
+- [ ] Stream-only track plays over authenticated LAN.
+- [ ] Lock the phone; audio continues.
+- [ ] Lock Screen artwork/title; pause, play, next, previous, seek — each command once.
+- [ ] Control Center pause/play and next/previous.
+- [ ] Leave the app ≥ 1 minute; playback continues; return shows the right track/state/position.
+- [ ] Interruption pauses; resumes only when iOS marks it resumable.
+- [ ] Force-quit after pause; relaunch does not crash while the service registers.
+
+Expected: a development-only warning that `RNTrackPlayer` uses the TurboModule interop layer. Failures: record build, iOS version, step, and console excerpt. Distinguish import-time registration failure from a playback/remote-event failure after `setupPlayer`.
+
+## Decisions
+
+**Keep `react-native-track-player` 4.1.2 on iOS / RN 0.86.** It is a legacy NativeModule. RN 0.86's interop layer loads it; unused sleep-timer exports are omitted rather than crashing. MusicSync does not call them.
+
+**Level volume at playback, do not rewrite audio.** The LocalMusic pipeline this replaces re-encoded every file with ffmpeg `loudnorm` because its players were third-party. Here the player is ours, so the server only *measures* (ReplayGain-style) and the phone applies the gain. Files stay byte-identical: no generation loss on lossy rips, lossless stays lossless, track ids and content keys do not move, and enabling leveling on an existing library costs one manifest refresh instead of re-downloading everything. The trade is that a volume control cannot boost, hence the 4 dB headroom. Revisit `HEADROOM_DB` if a player API with a pre-amp appears or the library drifts much quieter than -18 LUFS (re-survey with `ffmpeg -af ebur128`).
+
+Do not infer an iOS failure from the Android `kotlinx.coroutines.Job` registration bug. This product is iPhone-only.
+
+Do not migrate to `@rntp/player` v5 without a failing iOS runtime observation: it is not a drop-in, and the license is not a standard open-source grant.
+
+Revisit before RN/Expo upgrades, before Android support, if import-time registration fails on a physical iPhone, or when React Native announces interop-layer removal. After any RN or track-player upgrade, run the [playback smoke](#iphone-playback-smoke).
+
+## Library hygiene
+
+Fill tags **in the files**. Leave filenames unchanged.
+
+Track identity is the SHA-1 of the relative path. A rename is a new id plus a deletion of the old one. Tag-only edits keep the id and change the content key, so the phone re-downloads once and still stores one copy.
+
+Write the atoms the indexer already reads: MP4 `©ART` / `©nam` for `.m4a`, ID3 `TPE1` / `TIT2` for `.mp3`. Infer artist from `Artist - Title` filenames; skip ambiguous bare titles. Strip video junk from titles (`Official Video`, `Lyric Video`); keep remaster notes.
+
+Apply when a library indexes as all `Unknown Artist`, or before the first phone sync so it downloads once.
+
+## Lessons
+
+**Alert.prompt refresh is device-only.** On a physical iPhone (iOS 18), a React state update whose paint lands during Alert.prompt keyboard teardown can be swallowed. The iOS Simulator never shows this. Maestro green on sim is not proof. Fix: refresh immediately and again at 400ms (`refreshAfterPrompt` in `app/app/(tabs)/playlists.tsx`). Do not reach for `InteractionManager.runAfterInteractions`. Assert list rows with a regex/prefix plus an absence precheck — concatenated a11y text is not the string you typed. Diagnose UI bugs with two probes (what the screen shows + a direct SQLite read).
+
+**Shared checkout.** Announce before switching branches, or use a git worktree. A mid-build branch switch ships stale code to the phone.
+
+**Wrong cwd.** `expo run:ios` from repo root (not `app/`) generates a junk Expo project at root. Always `cd app` first.
+
+## Current deployment
+
+State as of 2026-09-09. Update this section when it changes; it is the hand-off between sessions.
+
+### Server (this Mac)
+
+- Config `~/.music-sync/config.json` is v2, port **5300** (5299 was taken). Two libraries: `default` = `~/Music/MusicSync-Test` (261 tracks, J) and `h` = `~/Music/MusicSync-H` (272 tracks, H). Both fully loudness-measured; values persist in `~/.music-sync/index-<name>.json`, so restarts do not re-measure.
+- The server runs as a foreground/session process and dies with the terminal that started it. Start it at the beginning of any session that needs sync: `npm -C server start` (config supplies music dirs and port). Check a port with `lsof -nP -iTCP:5300 -sTCP:LISTEN`.
+- Restarting does **not** require re-pairing. Changing the Mac's LAN IP does (the app stores the host in kv `serverConfig`): compare `ipconfig getifaddr en0` with what the phone holds, then `npm -C server start -- --pair --library <name>` and rescan.
+- All tags and cover art for both libraries are embedded in the files (see [Library hygiene](#library-hygiene)); no external cover cache is needed.
+
+### Phones
+
+| Phone | Library | iOS | Build installed | Notes |
+|---|---|---|---|---|
+| J's iPhone 14 | `default` | 18 | `cbcf858` (= main `22f9eb5` app code), 2026-09-05 | Cert trusted, leveling verified by ear. |
+| H's iPhone SE 3 | `h` | 26 | `cbcf858`, 2026-09-05 | Install OK; cert trust and pairing to `h` **unconfirmed** on the phone. |
+
+Both profiles were re-signed 2026-09-05 and expire **~2026-09-12**. List device ids with `xcrun xctrace list devices`; install fails if the phone is locked at connect time.
+
+### Re-sign / install procedure that actually works
+
+`expo run:ios` does not pass `-allowProvisioningUpdates`, so once the 7-day profile has lapsed it fails with `No profiles for 'com.jiaqi.musicsync'`. Mint a profile once from `app/ios/`, then install:
+
+```bash
+cd app/ios && xcodebuild -workspace MusicSync.xcworkspace -scheme MusicSync -configuration Release \
+  -destination 'id=<UDID>' -allowProvisioningUpdates build
+cd .. && npx expo run:ios --device <UDID> --configuration Release
+```
+
+After every re-sign the app installs but the launch step fails with `FBSOpenApplicationErrorDomain error 3` (invalid signature / profile not trusted). That is expected, not a build failure: confirm with `xcrun devicectl device info apps --device <UDID> | grep -i musicsync`, then on the phone Settings → General → VPN & Device Management → trust the Apple Development cert and launch from the home screen. `devicectl` launch can also fail with `CoreDeviceError 10002` when the phone is locked.
+
+### Shared checkout and worktrees
+
+The main checkout is shared (peers, the running server, device builds), so feature work goes in a worktree: `git worktree add .worktrees/<name> -b <branch> main` (`.worktrees/` is excluded via `.git/info/exclude`). Do **not** symlink root `node_modules` wholesale — npm workspace links would resolve `@music-sync/shared` into main's packages and the worktree's schema changes become invisible to tsc. Instead create `node_modules/` in the worktree, symlink every entry of main's `node_modules/*` and `.bin` into it, point `node_modules/@music-sync/{shared,server,app}` at `../../<pkg>`, and symlink `app/`, `server/`, `shared/` `node_modules` dirs directly. Then `npx vitest run --root <pkg>` / `npm run typecheck --workspace <pkg>` from the worktree root. Device builds from a worktree: `npx expo run:ios` from `<worktree>/app`, optionally `-derivedDataPath build` under `app/ios`.
+
+One worktree exists today: `.worktrees/feat-loudness` @ `cbcf858`, already merged into main. It is safe to remove (`git worktree remove .worktrees/feat-loudness`) once the server is started from the main checkout instead of from it.
+
+## Backlog
+
+Not started. In priority order:
+
+1. Confirm H's iPhone SE launches (trust cert) and pair it to library `h`.
+2. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
+3. Remove the merged `feat/loudness` worktree and branch.
+
+## Not in product
+
+- Android.
+- Playlist sync to the desktop. Playlists are phone-local.
+- Reorder-by-drag inside a playlist (schema has `position`; UI does not).
+- Album-aware leveling (one shared gain per album, as LocalMusic did). Leveling is per track; the libraries are single rips without album tags.
+- Cloud builds / EAS on the free Apple ID.
+- Public internet access to the server (LAN guard is load-bearing).

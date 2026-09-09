@@ -14,7 +14,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ios: {
     supportsTablet: false,
     bundleIdentifier: IS_DEV ? 'com.jiaqi.musicsync.dev' : 'com.jiaqi.musicsync',
-    // Free-provisioning personal team (7-day profiles — see MAC-SETUP §4).
+    // Free-provisioning personal team (7-day profiles — see README "Build the app (Mac)").
     appleTeamId: 'BK5VXTTH6P',
     infoPlist: {
       NSAppTransportSecurity: {
