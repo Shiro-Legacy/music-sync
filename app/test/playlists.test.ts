@@ -116,16 +116,16 @@ function insertTrack(id: string, title: string, durationSec: number): void {
 }
 
 describe('playlist database migration', () => {
-  it('reaches schema version 2 and creates playlist tables', () => {
+  it('reaches schema version 4 and creates migration tables', () => {
     const version = schema.db.getFirstSync<{ user_version: number }>('PRAGMA user_version');
-    expect(version?.user_version).toBe(3);
+    expect(version?.user_version).toBe(4);
 
     const tables = schema.db.getAllSync<{ name: string }>(
       `SELECT name FROM sqlite_master
-       WHERE type = 'table' AND name IN ('playlists', 'playlist_tracks')
+       WHERE type = 'table' AND name IN ('playlists', 'playlist_tracks', 'pending_metadata')
        ORDER BY name`,
     );
-    expect(tables.map(({ name }) => name)).toEqual(['playlist_tracks', 'playlists']);
+    expect(tables.map(({ name }) => name)).toEqual(['pending_metadata', 'playlist_tracks', 'playlists']);
   });
 });
 
@@ -155,6 +155,25 @@ describe('playlist queries', () => {
       'track-2',
       'track-1',
       'track-3',
+    ]);
+  });
+
+  it('copies a track to another playlist, keeps the source, and dedupes the destination', () => {
+    const sourceId = queries.createPlaylist('Source');
+    const destId = queries.createPlaylist('Dest');
+    queries.addTracksToPlaylist(sourceId, ['track-1', 'track-2']);
+    queries.addTracksToPlaylist(destId, ['track-1']);
+
+    queries.addTracksToPlaylist(destId, ['track-2']);
+    queries.addTracksToPlaylist(destId, ['track-1']);
+
+    expect(queries.playlistTracks(sourceId).map((track) => track.id)).toEqual([
+      'track-1',
+      'track-2',
+    ]);
+    expect(queries.playlistTracks(destId).map((track) => track.id)).toEqual([
+      'track-1',
+      'track-2',
     ]);
   });
 
@@ -227,5 +246,146 @@ describe('playlist queries', () => {
     queries.addTracksToPlaylist(playlistId, ids.slice(0, 10));
 
     expect(queries.playlistTracks(playlistId).map((track) => track.id)).toEqual(ids);
+  });
+});
+
+describe('track metadata editing', () => {
+  const SERVER = 'server-a';
+
+  /** Mirrors a paired library: serverConfig + trackLibraryServerId in kv. */
+  function pairAs(serverId: string): void {
+    queries.setServerConfig({ host: 'h', port: 1, token: 't', serverId, name: serverId });
+    queries.kvSet('trackLibraryServerId', serverId);
+  }
+
+  function manifestTrack(id: string, title: string, artist: string, contentKey = `content-${id}`) {
+    return {
+      id,
+      path: `${id}.mp3`,
+      size: 100,
+      mtimeMs: 1,
+      contentKey,
+      format: 'mp3' as const,
+      title,
+      artist,
+      album: 'Test Album',
+      durationSec: 60,
+    };
+  }
+
+  beforeEach(() => {
+    schema.db.runSync('DELETE FROM pending_metadata');
+    pairAs(SERVER);
+  });
+
+  it('applies the edit to the track row immediately and records a pending outbox entry', () => {
+    queries.saveTrackMetadata('track-1', '  Retitled Song  ', '  Fresh Artist ', SERVER);
+    expect(queries.byId('track-1')).toMatchObject({ title: 'Retitled Song', artist: 'Fresh Artist' });
+    expect(queries.listPendingMetadata(SERVER)).toEqual([
+      {
+        trackId: 'track-1',
+        serverId: SERVER,
+        contentKey: 'content-track-1',
+        title: 'Retitled Song',
+        artist: 'Fresh Artist',
+        generation: 1,
+      },
+    ]);
+  });
+
+  it('keeps a pending edit when a newer manifest from the same server arrives', () => {
+    queries.saveTrackMetadata('track-1', 'Edited', 'Edited Artist', SERVER);
+    queries.upsertFromManifest([manifestTrack('track-1', 'Server Title', 'Server Artist')], SERVER);
+    expect(queries.byId('track-1')).toMatchObject({ title: 'Edited', artist: 'Edited Artist' });
+    expect(queries.listPendingMetadata(SERVER)).toHaveLength(1);
+  });
+
+  it('lets a manifest with a new contentKey win over a stale pending edit, which survives for retry', () => {
+    queries.upsertFromManifest([manifestTrack('track-1', 'Server v1', 'Server Artist')], SERVER);
+    queries.saveTrackMetadata('track-1', 'Local Edit', 'Local Artist', SERVER); // pending on content-track-1, gen 1
+
+    // The file changed on the server: the pending edit targets the old bytes, so
+    // the overlay must not apply and the manifest tags win the row.
+    queries.upsertFromManifest([manifestTrack('track-1', 'Server v2', 'Server Artist 2', 'content-track-2')], SERVER);
+    expect(queries.byId('track-1')).toMatchObject({
+      title: 'Server v2',
+      artist: 'Server Artist 2',
+      contentKey: 'content-track-2',
+    });
+    expect(queries.listPendingMetadata(SERVER)).toEqual([
+      expect.objectContaining({ contentKey: 'content-track-1', generation: 1, title: 'Local Edit' }),
+    ]);
+
+    // Editing again snapshots the new file and starts a fresh generation.
+    queries.saveTrackMetadata('track-1', 'Local Edit 2', 'Local Artist 2', SERVER);
+    expect(queries.listPendingMetadata(SERVER)).toEqual([
+      expect.objectContaining({ contentKey: 'content-track-2', generation: 2, title: 'Local Edit 2' }),
+    ]);
+  });
+
+  it('applies server metadata normally once the conflicting edit has been acknowledged', () => {
+    queries.saveTrackMetadata('track-1', 'Local Edit', 'Local Artist', SERVER);
+    const [pending] = queries.listPendingMetadata(SERVER);
+    queries.acknowledgeMetadata(pending!);
+    expect(queries.listPendingMetadata(SERVER)).toEqual([]);
+
+    queries.upsertFromManifest([manifestTrack('track-1', 'Server Title', 'Server Artist')], SERVER);
+    expect(queries.byId('track-1')).toMatchObject({ title: 'Server Title', artist: 'Server Artist' });
+  });
+
+  it('acks only the generation it was sent, so a late response cannot clear a newer edit', () => {
+    queries.saveTrackMetadata('track-1', 'v1', 'A', SERVER);
+    queries.saveTrackMetadata('track-1', 'v2', 'B', SERVER);
+    const [pending] = queries.listPendingMetadata(SERVER);
+    expect(pending?.generation).toBe(2);
+
+    queries.acknowledgeMetadata({ ...pending!, generation: 1 }); // stale response
+    const after = queries.listPendingMetadata(SERVER);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ generation: 2, title: 'v2' });
+
+    queries.acknowledgeMetadata(after[0]!);
+    expect(queries.listPendingMetadata(SERVER)).toEqual([]);
+  });
+
+  it('scopes pending edits to their serverId, so another server manifest clobbers that track', () => {
+    queries.saveTrackMetadata('track-1', 'Local Edit', 'Local Artist', SERVER);
+    queries.upsertFromManifest([manifestTrack('track-1', 'Other Server Title', 'Other Artist')], 'server-b');
+    expect(queries.byId('track-1')).toMatchObject({ title: 'Other Server Title', artist: 'Other Artist' });
+    expect(queries.listPendingMetadata(SERVER)).toHaveLength(1); // edit stays queued for its own server
+    expect(queries.listPendingMetadata('server-b')).toEqual([]);
+
+    expect(() => queries.saveTrackMetadata('track-1', 'X', 'Y', 'server-other')).toThrow(/Sync this library/);
+  });
+
+  it('adopts the manifest server as editable via trackLibraryServerId in kv', () => {
+    queries.kvSet('trackLibraryServerId', ''); // not paired to server-m yet
+    queries.setServerConfig({ host: 'h', port: 1, token: 't', serverId: 'server-m', name: 'm' });
+    queries.upsertFromManifest([manifestTrack('track-1', 'Server Title', 'Server Artist')], 'server-m');
+    expect(queries.kvGet('trackLibraryServerId')).toBe('server-m');
+
+    queries.saveTrackMetadata('track-1', 'Edited', 'Ed Artist', 'server-m'); // guard now passes
+    expect(queries.byId('track-1')).toMatchObject({ title: 'Edited', artist: 'Ed Artist' });
+  });
+
+  it('rejects blank or oversized metadata and leaves no partial outbox row', () => {
+    expect(() => queries.saveTrackMetadata('track-1', '   ', 'Artist', SERVER)).toThrow();
+    expect(() => queries.saveTrackMetadata('track-1', 'Title', '   ', SERVER)).toThrow();
+    expect(() => queries.saveTrackMetadata('track-1', 'x'.repeat(301), 'Artist', SERVER)).toThrow();
+    expect(() => queries.saveTrackMetadata('track-1', 'Title', 'x'.repeat(301), SERVER)).toThrow();
+    expect(queries.listPendingMetadata(SERVER)).toEqual([]);
+
+    queries.saveTrackMetadata('track-1', 'x'.repeat(300), 'Artist', SERVER); // 300 is the limit
+    expect(queries.listPendingMetadata(SERVER)).toHaveLength(1);
+    expect(queries.byId('track-1')?.title).toHaveLength(300);
+  });
+
+  it('cascades pending edits when the track is deleted, then refuses further edits to it', () => {
+    queries.saveTrackMetadata('track-1', 'Edit', 'Artist', SERVER);
+    expect(queries.listPendingMetadata(SERVER)).toHaveLength(1);
+    queries.deleteRows(['track-1']);
+    expect(queries.byId('track-1')).toBeNull();
+    expect(queries.listPendingMetadata(SERVER)).toEqual([]);
+    expect(() => queries.saveTrackMetadata('track-1', 'X', 'Y', SERVER)).toThrow(/no longer in the library/);
   });
 });

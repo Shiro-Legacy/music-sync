@@ -11,6 +11,8 @@ export interface SyncState {
   /** Tracks that hit their retry limit during the current sync. */
   failed: number;
   error?: string;
+  /** Upload failure/conflict does not block downloading the rest of the library. */
+  metadataError?: string;
 }
 
 /**

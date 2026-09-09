@@ -22,6 +22,9 @@ const trackPlayer = vi.hoisted(() => {
       active = index;
     }),
     updateOptions: vi.fn(async () => undefined),
+    updateMetadataForTrack: vi.fn(async (index: number, metadata: { title?: string; artist?: string }) => {
+      queue[index] = { ...queue[index]!, ...metadata };
+    }),
     setVolume: vi.fn(async () => undefined),
     getActiveTrack: vi.fn(async () => (active === undefined ? undefined : queue[active])),
     getActiveTrackIndex: vi.fn(async () => active),
@@ -63,7 +66,9 @@ vi.mock('../src/api/client', () => ({
   authHeaders: vi.fn(() => ({})),
   trackUrl: vi.fn((_cfg: unknown, id: string) => `http://server/tracks/${id}`),
 }));
+const database = vi.hoisted(() => ({ byId: vi.fn((): Partial<TrackRow> | null => null) }));
 vi.mock('../src/db/queries', () => ({
+  byId: database.byId,
   getServerConfig: vi.fn(() => null),
   getVolumeLeveling: vi.fn(() => true),
   setVolumeLeveling: vi.fn(),
@@ -71,7 +76,7 @@ vi.mock('../src/db/queries', () => ({
 vi.mock('../src/sync/paths', () => paths);
 
 import { levelingVolume } from '../src/player/loudness';
-import { clearQueue, playContext, toPlayerTrack, toggleShuffle } from '../src/player/queue';
+import { clearQueue, playContext, refreshQueueMetadata, toPlayerTrack, toggleShuffle } from '../src/player/queue';
 import { setVolumeLeveling } from '../src/player/volume';
 import { usePlayerStore } from '../src/store/playerStore';
 
@@ -292,6 +297,25 @@ describe('clearQueue', () => {
     await toggleShuffle(); // off — must restore from the new context only
 
     expect(addedIds().every((id) => ['x', 'y'].includes(id))).toBe(true);
+  });
+});
+
+describe('refreshQueueMetadata', () => {
+  it('updates active/upcoming labels and shuffle context without interrupting playback', async () => {
+    usePlayerStore.setState({ shuffle: false });
+    await playContext([track('a'), track('b')], 0);
+    trackPlayer.reset.mockClear();
+    trackPlayer.play.mockClear();
+    database.byId.mockImplementation((...args: unknown[]) => ({ id: args[0] as string, title: 'New title', artist: 'New artist' }));
+    await refreshQueueMetadata();
+    expect(trackPlayer.updateMetadataForTrack).toHaveBeenCalledWith(0, { title: 'New title', artist: 'New artist' });
+    expect(trackPlayer.updateMetadataForTrack).toHaveBeenCalledWith(1, { title: 'New title', artist: 'New artist' });
+    expect(trackPlayer.reset).not.toHaveBeenCalled();
+    expect(trackPlayer.play).not.toHaveBeenCalled();
+    await toggleShuffle();
+    await toggleShuffle();
+    expect(trackPlayer._state().queue[1]).toMatchObject({ id: 'b', title: 'New title', artist: 'New artist' });
+    database.byId.mockReturnValue(null);
   });
 });
 

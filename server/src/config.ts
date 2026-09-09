@@ -20,6 +20,11 @@ export function libraryIndexPath(libraryName: string): string {
   return path.join(dataDir, `index-${libraryName}.json`);
 }
 
+/** Phone-submitted title/artist overrides; durable, not rebuildable from the music folder. */
+export function libraryOverridesPath(libraryName: string): string {
+  return path.join(dataDir, `overrides-${libraryName}.json`);
+}
+
 /** Per-library YouTube import job history. */
 export function libraryImportsPath(libraryName: string): string {
   return path.join(dataDir, `imports-${libraryName}.json`);

@@ -3,9 +3,10 @@ import { SymbolView } from 'expo-symbols';
 import { useEffect, useRef } from 'react';
 import { Animated, Image, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import TrackPlayer, { useActiveTrack, useIsPlaying } from 'react-native-track-player';
+import TrackPlayer, { useIsPlaying } from 'react-native-track-player';
 
 import { clearQueue } from '../player/queue';
+import { useCurrentTrack } from '../player/useCurrentTrack';
 import { usePlayerStore } from '../store/playerStore';
 import { colors } from './theme';
 
@@ -23,7 +24,7 @@ export function MiniPlayer() {
   const router = useRouter();
   const segments = useSegments();
   const insets = useSafeAreaInsets();
-  const track = useActiveTrack();
+  const track = useCurrentTrack();
   const { playing } = useIsPlaying();
   const dismissed = usePlayerStore((state) => state.dismissed);
 

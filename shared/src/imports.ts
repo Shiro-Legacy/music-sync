@@ -1,9 +1,9 @@
 import { z } from 'zod';
+import { TagStringSchema as tag } from './metadata.js';
 
 export const ImportPreviewRequestSchema = z.object({ url: z.string().trim().min(1).max(2048) }).strict();
 export type ImportPreviewRequest = z.infer<typeof ImportPreviewRequestSchema>;
 
-const tag = z.string().trim().min(1).max(300).refine((value) => !/[\x00-\x1f\x7f]/.test(value), 'Control characters are not allowed');
 export const ImportRequestSchema = ImportPreviewRequestSchema.extend({ title: tag, artist: tag });
 export type ImportRequest = z.infer<typeof ImportRequestSchema>;
 

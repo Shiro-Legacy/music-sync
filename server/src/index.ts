@@ -10,6 +10,7 @@ import {
   ConfigError,
   dataDir,
   libraryImportsPath,
+  libraryOverridesPath,
   libraryIndexPath,
   loadConfig,
   removeLibrary,
@@ -23,6 +24,7 @@ import { ImportQueue, LibraryImports } from './imports.js';
 import { scanLibrary } from './indexer.js';
 import { ffmpegAvailable, LoudnessScanner, needsLoudness } from './loudness.js';
 import { printPairing } from './pairing.js';
+import { MetadataOverrides, setTrackMetadata } from './overrides.js';
 import { IndexStore } from './store.js';
 import { startWatcher } from './watcher.js';
 
@@ -194,6 +196,10 @@ async function createRuntime(library: LibraryConfig, importQueue: ImportQueue): 
   store.load();
   store.installExitHandlers();
   const artwork = new ArtworkStore(artworkDir, store);
+  const overrides = new MetadataOverrides(libraryOverridesPath(library.name));
+  overrides.load();
+  // A crash between the sidecar write and the index flush would otherwise re-serve the pre-edit ETag.
+  if (overrides.size > 0) store.bumpRev();
 
   console.log(`[${library.name}] Indexing ${library.musicDir} ...`);
   const started = Date.now();
@@ -238,7 +244,10 @@ async function createRuntime(library: LibraryConfig, importQueue: ImportQueue): 
     tokenDigest: digestToken(library.token),
     getRev: () => store.rev,
     getTracks: () =>
-      store.entries().sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+      store
+        .entries()
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+        .map((entry) => overrides.apply(entry)),
     getTrackById: (id) => store.getById(id),
     getTrackFilePath: (entry) => path.join(library.musicDir, entry.path),
     getArtwork: (artworkId) => {
@@ -246,6 +255,7 @@ async function createRuntime(library: LibraryConfig, importQueue: ImportQueue): 
       if (mime === undefined) return undefined;
       return { filePath: artwork.filePath(artworkId), mime };
     },
+    setTrackMetadata: (id, patch) => setTrackMetadata(store, overrides, id, patch, log),
     imports,
   };
 }

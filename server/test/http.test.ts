@@ -89,6 +89,7 @@ beforeAll(async () => {
         getTrackFilePath: () => trackFile,
         getArtwork: (id) =>
           id === ARTWORK_ID ? { filePath: artworkFile, mime: 'image/jpeg' } : undefined,
+        setTrackMetadata: async () => undefined,
       },
       {
         name: 'bob',
@@ -100,6 +101,7 @@ beforeAll(async () => {
         getTrackFilePath: () => trackFileB,
         getArtwork: (id) =>
           id === ARTWORK_ID ? { filePath: artworkFileB, mime: 'image/png' } : undefined,
+        setTrackMetadata: async () => undefined,
       },
     ],
   };

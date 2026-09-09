@@ -105,12 +105,15 @@ Defined in `shared/src/`. Default port **5299**. API version 1.
 | `GET /api/v1/ping` | optional bearer | Pairing diagnostics. With a valid token, `serverId` is that library's; otherwise the first library's. |
 | `GET /api/v1/manifest` | required | ETag `"rev-N"`; `If-None-Match` → 304. |
 | `GET /api/v1/tracks/:id` | required | Range requests; ETag is the content key; `If-Match` → 412 on mismatch. Path is never derived from user input — lookup by id only. |
+| `PATCH /api/v1/tracks/:id/metadata` | required | `{ title, artist }` → `{ serverId, id, title, artist }`. Requires matching `X-MusicSync-Server-Id` and `If-Match` content key; edits MusicSync metadata, never audio bytes. |
 | `GET /api/v1/artwork/:artworkId` | required | 40-hex SHA-1 only; immutable cache. |
 | `POST /api/v1/imports/preview` | required | `{ url }` → `{ serverId, preview }` with suggested tags, duration, thumbnail. YouTube single-video links only. |
 | `POST /api/v1/imports` | required | `{ url, title, artist }` → `{ serverId, job }`; accepts a durable background import, or returns the existing job/track for that video. |
 | `GET /api/v1/imports` | required | `{ serverId, available, unavailableReason?, jobs }`; recent jobs for the authenticated library only. |
 
 Import routes additionally require `X-MusicSync-Server-Id` to match the paired library identity (409 otherwise). Bodies are strictly validated; clients cannot select a library, filesystem path, or downloader arguments. Errors use `{ error }`. Import schemas live in `shared/src/imports.ts`.
+
+Metadata PATCH bodies are strict: title and artist are trimmed, nonempty, at most 300 characters each, with no control characters. Missing/wrong identity → 409; missing byte precondition → 428; changed bytes → 412; unknown track → 404. Accepted overrides are persisted before success; repeated identical edits are safe. Schemas live in `shared/src/metadata.ts`.
 
 Every request is LAN-only (loopback, RFC1918, link-local, IPv6 ULA/link-local). Non-LAN → 403. Missing/wrong bearer on authenticated routes → 401. Token compare is timing-safe SHA-256 digest match against each library.
 
@@ -125,6 +128,7 @@ Config and indexes live in `~/.music-sync/` (override with `MUSIC_SYNC_DATA_DIR`
 ```
 ~/.music-sync/config.json          v2: port, host name, libraries[]
 ~/.music-sync/index-<name>.json    per-library track index
+~/.music-sync/overrides-<name>.json  durable title/artist edits (not a rebuildable cache)
 ~/.music-sync/artwork/             shared, content-addressed artwork
 ```
 
@@ -135,6 +139,12 @@ Indexer: reuse an existing entry when size + mtime are unchanged; otherwise reco
 Loudness (`server/src/loudness.ts`): after every scan and watcher change, a background pass measures each playable track that has no `loudness` yet with `ffmpeg -af ebur128=peak=true` (two at a time, a few seconds per track) and writes `loudness` / `truePeak` into the entry. Serving never waits for it: the manifest is published immediately, partial results are pushed as a rev bump at most once a minute, and one final bump when the pass ends. ffmpeg is optional — without it the server warns once and tracks simply have no loudness. Files ffmpeg cannot read are skipped until the next server start. `--status` shows coverage as `measured/playable`.
 
 `--remove-library` drops the library from config only. Music files and the index file stay on disk. The last library cannot be removed.
+
+### Song metadata edits
+
+The phone saves title/artist edits offline, then uploads them on the next reachable sync. The desktop keeps per-library overrides in `overrides-<name>.json` and publishes them in the manifest. Audio tags, filenames, content keys, and loudness measurements stay unchanged, so edits do **not** re-download audio. Other music apps reading the files still see their original tags.
+
+Overrides are keyed by track id and guarded by content key: scans/restarts preserve them, but renaming a desktop file or changing its bytes retires the override. Duplicate files at different paths can be edited independently. Last server-accepted edit wins between phones; no conflict-merging UI. A corrupt override file is preserved and disables further edits with an error, not silently overwritten.
 
 ### YouTube imports
 
@@ -169,7 +179,7 @@ Two variants, selected by `APP_VARIANT` in `app/app.config.ts`:
 
 Root stack (`app/app/_layout.tsx`): `(tabs)`, full-screen `/player` modal (gestures off — a sheet pull-down cancels seek-bar drags), `/pair` modal. Migrations run at module load before any screen touches SQLite.
 
-Tabs: **Library** (Artists / Albums / Songs), **Playlists**, **Sync**, **Settings**. Library detail routes live on the root stack: `/library/artist/[artist]`, `/library/album/[key]`, `/library/playlist/[id]`, `/library/playlist/[id]/add`, and `/library/import` (YouTube preview/add and recent import jobs).
+Tabs: **Library** (Artists / Albums / Songs), **Playlists**, **Sync**, **Settings**. Library detail routes live on the root stack: `/library/artist/[artist]`, `/library/album/[key]`, `/library/playlist/[id]`, `/library/playlist/[id]/add`, `/library/playlist/[id]/copy` (destination picker), `/library/song/[id]/edit` (title/artist editor), and `/library/import` (YouTube preview/add and recent import jobs).
 
 Mini player mounts once in the root layout. Visible on tab routes and `/library/*` when a track is loaded and not dismissed. Hidden on `/player` and `/pair`. Swipe left clears the queue. Tap the bar (not its buttons) opens the full player. Play/pause and skip-next are nested pressables.
 
@@ -179,6 +189,8 @@ Mini player mounts once in the root layout. Visible on tab routes and `/library/
 
 1. `tracks` + `kv` (pairing, ETag/rev, held deletions).
 2. `playlists` + `playlist_tracks` (PK `(playlistId, trackId)` — a track appears at most once per playlist; `ON DELETE CASCADE` from both playlist and track).
+3. Server loudness / true-peak columns on `tracks`.
+4. `pending_metadata` outbox: library identity, track id, original content key, edited title/artist, generation. The row edit and outbox write are atomic; deletion of the track cascades to its queued edits. `kv.trackLibraryServerId` prevents editing a previous library's rows while a new pairing is awaiting its first manifest.
 
 Library data and playlists live in SQLite, not Zustand. Zustand holds live sync progress (`syncStore`) and player chrome flags (`playerStore`: `shuffle`, `dismissed`). Screens refresh on focus; after mutations bump local state so memoized queries rerun.
 
@@ -189,6 +201,10 @@ Wiping the local library deletes track rows (cascade removes playlist entries) b
 Downloaded audio lives in `Documents/Music/<id>.<ext>` and artwork in `Documents/Artwork/<artworkId>`. Both directories are excluded from iCloud backup. The SQLite `localUri` column records the absolute file URI at download time, but iOS rotates the app-container UUID on reinstall, so that prefix goes stale — playback always resolves `<id>.<ext>` against the current container (`resolveLocalUri` in `app/src/sync/paths.ts`). A same-bundle-id re-sign or update keeps the library; deleting the app does not.
 
 ## Sync
+
+**Metadata uploads precede manifest downloads.** Long-press a song in the library or a playlist → **Edit Song** → edit title/artist → **Save**. The phone updates immediately, attempts sync, and retains edits across offline use/relaunch. The Sync tab shows edits waiting to upload and errors. Existing app-open, Wi-Fi-reconnect, manual, and OS background triggers retry them; merely being on Wi-Fi is not a guarantee of immediate iOS background execution.
+
+Pending title/artist edits overlay manifest tags while the file's content key still matches, until their matching generation is acknowledged; a late response cannot clear a newer edit. Uploads and acknowledgments are scoped to the paired server identity. A replaced desktop file returns 412: the library shows the replacement's tags, while Edit Song keeps the unsent draft and warns before applying it to the new bytes. Review and save again to confirm. Upload conflicts appear on the Sync tab without blocking library downloads. Missing desktop songs follow normal deletion/held-deletion rules. Wiping the local library also discards unsent edits. An older desktop server cannot accept edits: they remain on the phone until the server is updated and sync is retried.
 
 `shared/src/diff.ts` → `computeSyncPlan(manifestTracks, localTracks)`:
 
@@ -218,6 +234,8 @@ Downloads use `@kesha-antonov/react-native-background-downloader` (URLSession). 
 - `playContext(rows, index, { shuffle? })` is the only queue boundary. It resets RNTP, maps rows (`synced` → local file, else authenticated LAN URL), then plays. Adding to an empty queue already selects index 0 — do not `skip(0)`.
 - Shuffle is a persistent mode in `playerStore`. On: keep current, randomize the rest of the original context (including already-played, so shuffle still does something on the last song). Off: restore leftover original order after the current track. Queue writes are serialized (`enqueue`) so play/toggle cannot interleave.
 - Repeat cycles Off → Queue → Track on the full player.
+- The full player's square artwork fits the height left after metadata, seek bar, and transport controls, rather than using screen width alone. The iPhone SE's controls stay inside the bottom safe area.
+- Title/artist edits refresh the mini/full player, native queue/Lock Screen metadata, and saved shuffle context without restarting playback. `useCurrentTrack` reads current database labels because RNTP's metadata-update call does not emit an active-track event.
 - Remote events (Lock Screen / Control Center / interruption duck) live in `app/src/player/service.ts`.
 - **Volume leveling** (`app/src/player/loudness.ts`, `volume.ts`): the loudness the server measured rides on each RNTP track (`toPlayerTrack`), and `PlaybackActiveTrackChanged` sets the player volume to `10^((-18 - loudness) / 20)`, clamped to 1. Target is -14 LUFS (LocalMusic parity) minus 4 dB headroom: a volume control can only attenuate, and a survey of the real libraries (533 tracks, median -9.4 LUFS, 5th percentile -17.3) showed 4 dB fully levels 97% of tracks. A -8 LUFS track plays at 0.32, a -18 LUFS track at 1.0, unmeasured tracks are treated as -14, and the whole library comes out ~4 dB quieter than raw playback. `playContext` levels the first track before `play()`. Settings → Playback → Volume leveling toggles it (kv `volumeLeveling`, default on) and re-levels the current track immediately.
 - `UIBackgroundModes: ['audio']`. Local Network permission is required to reach the server (`NSAllowsLocalNetworking` for cleartext LAN HTTP).
@@ -228,7 +246,7 @@ Local-only. Never sent to the server.
 
 - Create / rename / delete. **＋ New Playlist** offers Empty playlist, or Add unsorted songs when any track is in no playlist (default name `Unsorted`).
 - Listed in creation order (new at the bottom). Subtitle is `N songs · M min` under an hour, `N songs · X hr` at ≥ 1 hour.
-- Detail: play / shuffle via `playContext` in displayed order; add songs (search + multi-select + **Add all (N)** of the current filter; confirm when N > 50); long-press a row to remove. Already-in-playlist tracks are excluded. Inserts `INSERT OR IGNORE` and append after `MAX(position)`.
+- Detail: play / shuffle via `playContext` in displayed order; add songs (search + multi-select + **Add all (N)** of the current filter; confirm when N > 50); long-press a row for **Copy to playlist**, **Edit Song**, or **Remove**. Copy chooses another existing playlist, keeps the song in the source, and appends it to the destination without duplicating an existing entry or audio file. Already-in-playlist tracks are excluded from Add Songs. Inserts `INSERT OR IGNORE` and append after `MAX(position)`.
 - Unsorted = `NOT EXISTS` against `playlist_tracks`, ordered `title COLLATE NOCASE` like the Songs tab. A song in any playlist is not unsorted.
 - After `Alert.prompt` create/rename, refresh immediately **and** again after 400ms. Device-only: iOS 18 can swallow a repaint that lands during keyboard/alert teardown. The simulator does not reproduce this. See [Lessons](#lessons).
 
@@ -345,7 +363,7 @@ This overwrites `ios/` with the dev variant (a second App ID, also 7-day expiry)
 ## Testing
 
 ```bash
-npm test              # vitest across workspaces (shared diff/import schemas, server HTTP/config/indexer/loudness/imports, app queue/playlists/leveling/import client)
+npm test              # vitest across workspaces (shared schemas/diff, server HTTP/config/indexer/loudness/imports/overrides, app queue/playlists/layout/metadata/import clients)
 npm run typecheck     # tsc across workspaces
 ```
 
@@ -380,6 +398,13 @@ Accessibility conventions:
 - Assert absence before create (`assertNotVisible: "${NAME}.*"`).
 - `maestro hierarchy` dumps the tree when a flow stalls.
 
+### Song tools acceptance
+
+- Copy a song A → B, repeat the copy, and verify it remains in A and appears once in B; Remove still removes only playlist membership.
+- Offline: edit title/artist, reopen the app, and verify library search/grouping, playlists, and the current player show the edit. Reconnect and Sync Now: pending count clears and the desktop manifest/another paired phone receive the edit, with no audio download.
+- Edit again while the first upload is in flight; the newer edit must remain pending. Restart the desktop after an accepted edit and confirm its manifest still contains it. Replace the desktop file before upload and verify the conflict is visible rather than silently relabeling the replacement.
+- iPhone SE 3 (375×667): open the full player with a two-line title, verify the entire previous/play/next controls and seek bar are visible and tappable; repeat with large text. In Edit Song, open the keyboard and verify Save remains reachable.
+
 ### iPhone playback smoke
 
 Run after the first Release install and after upgrading React Native or `react-native-track-player`. Simulator cannot validate background audio or Control Center.
@@ -413,7 +438,7 @@ Revisit before RN/Expo upgrades, before Android support, if import-time registra
 
 ## Library hygiene
 
-Fill tags **in the files**. Leave filenames unchanged.
+For desktop library cleanup, fill tags **in the files** and leave filenames unchanged. Phone **Edit Song** is intentionally different: it changes MusicSync's sidecar metadata only (see [Song metadata edits](#song-metadata-edits)).
 
 Track identity is the SHA-1 of the relative path. A rename is a new id plus a deletion of the old one. Tag-only edits keep the id and change the content key, so the phone re-downloads once and still stores one copy.
 
@@ -439,7 +464,8 @@ State as of 2026-09-09. Update this section when it changes; it is the hand-off 
 - The server runs as a foreground/session process and dies with the terminal that started it. Start it at the beginning of any session that needs sync: `npm -C server start` (config supplies music dirs and port). Check a port with `lsof -nP -iTCP:5300 -sTCP:LISTEN`.
 - Restarting does **not** require re-pairing. Changing the Mac's LAN IP does (the app stores the host in kv `serverConfig`): compare `ipconfig getifaddr en0` with what the phone holds, then `npm -C server start -- --pair --library <name>` and rescan.
 - All tags and cover art for both libraries are embedded in the files (see [Library hygiene](#library-hygiene)); no external cover cache is needed.
-- YouTube imports: `yt-dlp` **2026.08.19** installed via Homebrew on 2026-09-09 (`/opt/homebrew/bin/yt-dlp`, bundles mutagen + EJS; `ffmpeg`/`ffprobe` 9.0.1 already present). The server runs from `main` with the import routes live. No real YouTube download has been performed yet — only the offline fixture smoke (`.quad/shared/ytdlp-tools/offline-smoke.py`, scratch).
+- YouTube imports: `yt-dlp` **2026.08.19** installed via Homebrew on 2026-09-09 (`/opt/homebrew/bin/yt-dlp`, bundles mutagen + EJS; `ffmpeg`/`ffprobe` 9.0.1 already present). No real YouTube download has been performed yet — only the offline fixture smoke (`.quad/shared/ytdlp-tools/offline-smoke.py`, scratch).
+- Song tools are implemented in `main`: playlist copying, offline-first title/artist edits with desktop metadata sync, and the SE player layout fix. Typechecks, automated tests, and iOS production JS export pass; **not yet installed or validated on either physical phone**. No server was listening on port 5300 at the end-of-change check; start the updated server before testing uploads.
 
 ### Phones
 
@@ -466,15 +492,16 @@ After every re-sign the app installs but the launch step fails with `FBSOpenAppl
 
 The main checkout is shared (peers, the running server, device builds), so feature work goes in a worktree: `git worktree add .worktrees/<name> -b <branch> main` (`.worktrees/` is excluded via `.git/info/exclude`). Do **not** symlink root `node_modules` wholesale — npm workspace links would resolve `@music-sync/shared` into main's packages and the worktree's schema changes become invisible to tsc. Instead create `node_modules/` in the worktree, symlink every entry of main's `node_modules/*` and `.bin` into it, point `node_modules/@music-sync/{shared,server,app}` at `../../<pkg>`, and symlink `app/`, `server/`, `shared/` `node_modules` dirs directly. Then `npx vitest run --root <pkg>` / `npm run typecheck --workspace <pkg>` from the worktree root. Device builds from a worktree: `npx expo run:ios` from `<worktree>/app`, optionally `-derivedDataPath build` under `app/ios`.
 
-No worktrees or side branches exist today; everything is on `main`.
+The merged song-tools worktree remains at `.worktrees/song-tools` on `feat/song-tools` for verification; `main` includes the changes. No branch switch or device install was performed during this work.
 
 ## Backlog
 
-Not started. In priority order:
+In priority order:
 
-1. Device build for H's iPhone SE from `main` (J's iPhone 14 done 2026-09-09) so the Library → Import from YouTube screen is on both phones (profiles expire ~2026-09-12; see re-sign procedure). Then live acceptance with an authorized link: preview → edit tags → add → ready on desktop → synced on phone; verify the SE keyboard does not cover the Add button.
-2. Confirm H's iPhone SE launches (trust cert) and pair it to library `h`.
-3. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
+1. Build/install the song-tools changes on both phones (profiles expire ~2026-09-12; see re-sign procedure), start the updated server, and run [Song tools acceptance](#song-tools-acceptance), especially SE control visibility and offline edit → reconnect upload.
+2. Confirm H's iPhone SE is paired to library `h`.
+3. Live YouTube acceptance with an authorized link: preview → edit tags → add → ready on desktop → synced on phone; verify the SE keyboard does not cover Add.
+4. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
 
 ## Not in product
 

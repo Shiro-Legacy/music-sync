@@ -1,7 +1,7 @@
 import TrackPlayer, { type AddTrack, type Track } from 'react-native-track-player';
 
 import { authHeaders, trackUrl } from '../api/client';
-import { getServerConfig, type ServerConfig, type TrackRow } from '../db/queries';
+import { byId, getServerConfig, type ServerConfig, type TrackRow } from '../db/queries';
 import { usePlayerStore } from '../store/playerStore';
 import { localArtworkUri, resolveLocalUri } from '../sync/paths';
 import { assertCapabilities } from './setup';
@@ -189,6 +189,26 @@ export async function toggleShuffle(): Promise<void> {
     } catch (error) {
       if (usePlayerStore.getState().shuffle === next) setShuffleFlag(!next);
       throw error;
+    }
+  });
+}
+
+/** Refresh labels without resetting playback, including the saved shuffle context. */
+export function refreshQueueMetadata(): Promise<void> {
+  usePlayerStore.setState((state) => ({ metadataVersion: state.metadataVersion + 1 }));
+  return enqueue(async () => {
+    const refresh = (track: AddTrack): AddTrack => {
+      const id = trackId(track);
+      const row = id === undefined ? null : byId(id);
+      return row === null ? track : { ...track, title: row.title, artist: row.artist };
+    };
+    originalQueue = originalQueue.map(refresh);
+    const queue = await TrackPlayer.getQueue();
+    for (const [index, track] of queue.entries()) {
+      const updated = refresh(track);
+      if (updated.title !== track.title || updated.artist !== track.artist) {
+        await TrackPlayer.updateMetadataForTrack(index, { title: updated.title, artist: updated.artist });
+      }
     }
   });
 }

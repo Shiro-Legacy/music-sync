@@ -9,6 +9,7 @@ export const apiRoutes = {
   imports: '/api/v1/imports',
   importPreview: '/api/v1/imports/preview',
   track: (id: string) => `/api/v1/tracks/${id}`,
+  trackMetadata: (id: string) => `/api/v1/tracks/${id}/metadata`,
   artwork: (artworkId: string) => `/api/v1/artwork/${artworkId}`,
 } as const;
 

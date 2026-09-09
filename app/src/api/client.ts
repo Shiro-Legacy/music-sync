@@ -32,7 +32,7 @@ export function artworkUrl(cfg: ServerEndpoint, artworkId: string): string {
 export interface AuthedFetchOptions {
   timeoutMs?: number;
   extraHeaders?: Record<string, string>;
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH';
   /** JSON string body; sends Content-Type: application/json when present. */
   body?: string;
   /** External abort (e.g. screen blur) — aborts this request early. */

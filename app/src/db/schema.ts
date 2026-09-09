@@ -56,6 +56,21 @@ const MIGRATIONS: readonly string[] = [
   ALTER TABLE tracks ADD COLUMN loudness REAL;
   ALTER TABLE tracks ADD COLUMN truePeak REAL;
   `,
+  `
+  CREATE TABLE pending_metadata (
+    trackId TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    serverId TEXT NOT NULL,
+    contentKey TEXT NOT NULL,
+    title TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    PRIMARY KEY (serverId, trackId)
+  );
+  INSERT OR IGNORE INTO kv (key, value)
+    SELECT 'trackLibraryServerId', json_extract(value, '$.serverId') FROM kv
+    WHERE key = 'serverConfig' AND json_valid(value)
+      AND json_extract(value, '$.serverId') IS NOT NULL;
+  `,
 ];
 
 let migrated = false;

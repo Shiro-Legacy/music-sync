@@ -517,6 +517,7 @@ describe('import HTTP routes', () => {
           getTrackById: (id) => store.getById(id),
           getTrackFilePath: (entry) => path.join(musicDir, entry.path),
           getArtwork: () => undefined,
+          setTrackMetadata: async () => undefined,
           imports: importer,
         },
         {
@@ -528,6 +529,7 @@ describe('import HTTP routes', () => {
           getTrackById: () => undefined,
           getTrackFilePath: () => '',
           getArtwork: () => undefined,
+          setTrackMetadata: async () => undefined,
           imports: other.importer,
         },
       ],
@@ -642,6 +644,7 @@ describe('import HTTP routes', () => {
           getTrackById: () => undefined,
           getTrackFilePath: () => '',
           getArtwork: () => undefined,
+          setTrackMetadata: async () => undefined,
           imports: unavailable,
         },
       ],

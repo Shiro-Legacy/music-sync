@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { TrackRow as TrackRowData } from '../db/queries';
 import { colors, formatDuration } from './theme';
@@ -29,11 +30,22 @@ export function TrackRow({
   onPress: () => void;
   onLongPress?: () => void;
 }) {
+  const router = useRouter();
   const badge = stateBadge(track.state);
+  const showActions = onLongPress ?? (() => Alert.alert(track.title, undefined, [
+    { text: 'Edit Song', onPress: () => router.push({ pathname: '/library/song/[id]/edit', params: { id: track.id } }) },
+    { text: 'Cancel', style: 'cancel' },
+  ]));
   return (
     <Pressable
       onPress={onPress}
-      onLongPress={onLongPress}
+      onLongPress={showActions}
+      accessibilityRole="button"
+      accessibilityHint="Double tap to play. Long press for song options."
+      accessibilityActions={[{ name: 'longpress', label: 'Song options' }]}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === 'longpress') showActions();
+      }}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     >
       {track.trackNo !== null && !showArtist ? (

@@ -57,6 +57,30 @@ export default function PlaylistScreen() {
     ]);
   };
 
+  const showActions = (track: TrackRowData) => {
+    if (id === null) return;
+    Alert.alert(track.title, undefined, [
+      {
+        text: 'Copy to playlist',
+        onPress: () =>
+          router.push({
+            pathname: '/library/playlist/[id]/copy',
+            params: { id: String(id), trackId: track.id },
+          }),
+      },
+      {
+        text: 'Edit Song',
+        onPress: () =>
+          router.push({
+            pathname: '/library/song/[id]/edit',
+            params: { id: track.id },
+          }),
+      },
+      { text: 'Remove', style: 'destructive', onPress: () => confirmRemove(track) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   return (
     <View style={styles.container}>
       <Stack.Screen
@@ -120,7 +144,7 @@ export default function PlaylistScreen() {
           <TrackRow
             track={item}
             onPress={() => void playContext(tracks, index)}
-            onLongPress={() => confirmRemove(item)}
+            onLongPress={() => showActions(item)}
           />
         )}
       />

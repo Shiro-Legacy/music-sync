@@ -21,6 +21,7 @@ export class IndexStore {
   private dirty = false;
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
   private exitHandlersInstalled = false;
+  private flushChain: Promise<void> = Promise.resolve();
   private readonly byPath = new Map<string, TrackEntry>();
   private readonly byId = new Map<string, TrackEntry>();
   private readonly artworkMeta = new Map<string, string>();
@@ -112,7 +113,14 @@ export class IndexStore {
     this.persistTimer.unref();
   }
 
-  async flush(): Promise<void> {
+  /** Serialized: a forced flush and the debounced one must not write the same .tmp concurrently. */
+  flush(): Promise<void> {
+    const next = this.flushChain.then(() => this.flushNow());
+    this.flushChain = next;
+    return next;
+  }
+
+  private async flushNow(): Promise<void> {
     if (!this.dirty) return;
     this.clearTimer();
     this.dirty = false;

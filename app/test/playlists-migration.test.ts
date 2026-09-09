@@ -30,6 +30,35 @@ const V1_SEED = `
   PRAGMA user_version = 1;
 `;
 
+// Same v1 schema, but the pairing already carries a serverId — the v4 migration
+// must seed trackLibraryServerId from it so the library is editable.
+const V1_PAIRED_SEED = `
+  CREATE TABLE tracks (
+    id TEXT PRIMARY KEY NOT NULL,
+    path TEXT NOT NULL,
+    contentKey TEXT NOT NULL,
+    format TEXT NOT NULL,
+    title TEXT NOT NULL,
+    artist TEXT NOT NULL,
+    albumArtist TEXT,
+    album TEXT NOT NULL,
+    trackNo INTEGER,
+    discNo INTEGER,
+    year INTEGER,
+    genre TEXT,
+    durationSec REAL NOT NULL,
+    size INTEGER NOT NULL,
+    artworkId TEXT,
+    state TEXT NOT NULL DEFAULT 'queued',
+    localUri TEXT,
+    errorCount INTEGER NOT NULL DEFAULT 0,
+    updatedAt INTEGER NOT NULL
+  );
+  CREATE TABLE kv (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+  INSERT INTO kv (key, value) VALUES ('serverConfig', '{"host":"h","serverId":"server-1"}');
+  PRAGMA user_version = 1;
+`;
+
 const mockState = vi.hoisted(() => ({ seedSql: '' }));
 
 vi.mock('expo-sqlite', async () => {
@@ -115,7 +144,7 @@ describe('migrations from schema version 1', () => {
 
   it('preserves existing tracks and key-value data while reaching the current version', () => {
     const version = schema.db.getFirstSync<{ user_version: number }>('PRAGMA user_version');
-    expect(version?.user_version).toBe(3);
+    expect(version?.user_version).toBe(4);
 
     const track = schema.db.getFirstSync<{ id: string; title: string }>(
       'SELECT id, title FROM tracks WHERE id = ?',
@@ -134,9 +163,46 @@ describe('migrations from schema version 1', () => {
 
     const tables = schema.db.getAllSync<{ name: string }>(
       `SELECT name FROM sqlite_master
-       WHERE type = 'table' AND name IN ('playlists', 'playlist_tracks')
+       WHERE type = 'table' AND name IN ('playlists', 'playlist_tracks', 'pending_metadata')
        ORDER BY name`,
     );
-    expect(tables.map(({ name }) => name)).toEqual(['playlist_tracks', 'playlists']);
+    expect(tables.map(({ name }) => name)).toEqual(['pending_metadata', 'playlist_tracks', 'playlists']);
+
+    // v4 created the metadata outbox with the right columns and a cascade FK on trackId.
+    const columns = schema.db
+      .getAllSync<{ name: string }>('PRAGMA table_info(pending_metadata)')
+      .map(({ name }) => name);
+    expect(columns).toEqual(
+      expect.arrayContaining(['contentKey', 'serverId', 'trackId', 'title', 'artist', 'generation']),
+    );
+
+    // The legacy serverConfig has no serverId, so no library gets adopted as editable.
+    const libServer = schema.db.getFirstSync<{ key: string }>(
+      'SELECT key FROM kv WHERE key = ?',
+      'trackLibraryServerId',
+    );
+    expect(libServer).toBeNull();
+  });
+});
+
+describe('migration from a v1 pairing that already has a serverId', () => {
+  let pairedSchema!: typeof import('../src/db/schema');
+
+  beforeAll(async () => {
+    mockState.seedSql = V1_PAIRED_SEED;
+    vi.resetModules();
+    pairedSchema = await import('../src/db/schema');
+    pairedSchema.runMigrations();
+  });
+
+  it('reaches version 4 and seeds trackLibraryServerId from the existing serverConfig', () => {
+    const version = pairedSchema.db.getFirstSync<{ user_version: number }>('PRAGMA user_version');
+    expect(version?.user_version).toBe(4);
+
+    const kv = pairedSchema.db.getFirstSync<{ value: string }>(
+      'SELECT value FROM kv WHERE key = ?',
+      'trackLibraryServerId',
+    );
+    expect(kv?.value).toBe('server-1');
   });
 });

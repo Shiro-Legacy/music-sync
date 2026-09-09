@@ -10,12 +10,16 @@ import {
   ImportPreviewRequestSchema,
   ImportPreviewResponseSchema,
   ImportRequestSchema,
+  TrackMetadataPatchSchema,
+  TrackMetadataResponseSchema,
   type Manifest,
   type PingResponse,
   type TrackEntry,
   type TrackFormat,
+  type TrackMetadataPatch,
 } from '@music-sync/shared';
 import { ImportError, type ImportService } from './imports.js';
+import { MetadataConflictError, OverridesCorruptError } from './overrides.js';
 import { YoutubeUrlError } from './youtube-url.js';
 
 /** One isolated library exposed by the HTTP layer; getter injection keeps tests lightweight. */
@@ -28,6 +32,8 @@ export interface LibraryRuntime {
   getTrackById(id: string): TrackEntry | undefined;
   getTrackFilePath(entry: TrackEntry): string;
   getArtwork(artworkId: string): { filePath: string; mime: string } | undefined;
+  /** Sidecar title/artist override for the phone. Resolves the published entry, or undefined for an unknown id. */
+  setTrackMetadata(id: string, patch: TrackMetadataPatch): Promise<TrackEntry | undefined>;
   imports?: ImportService;
 }
 
@@ -294,6 +300,34 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
           );
         } catch (err) {
           return sendImportError(reply, err);
+        }
+      });
+
+      // Phone-side title/artist edits. Same paired-identity guard as imports; lookup is by id only.
+      imports.patch<{ Params: { id: string } }>(apiRoutes.trackMetadata(':id'), async (request, reply) => {
+        const current = request.library!.getTrackById(request.params.id);
+        if (current === undefined) return reply.code(404).send({ error: 'not found' });
+        // The phone edited a specific file; a replaced or re-tagged file at the same path must not inherit the edit.
+        const ifMatch = request.headers['if-match'];
+        if (ifMatch === undefined) return reply.code(428).send({ error: 'If-Match with the content key is required' });
+        if (!ifMatchSatisfied(ifMatch, current.contentKey)) return reply.code(412).send({ error: 'track content changed' });
+        const body = TrackMetadataPatchSchema.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ error: 'invalid request' });
+        try {
+          const entry = await request.library!.setTrackMetadata(current.id, body.data);
+          if (entry === undefined) return reply.code(404).send({ error: 'not found' });
+          return reply.send(
+            TrackMetadataResponseSchema.parse({
+              serverId: request.library!.serverId,
+              id: entry.id,
+              title: entry.title,
+              artist: entry.artist,
+            }),
+          );
+        } catch (err) {
+          if (err instanceof MetadataConflictError) return reply.code(412).send({ error: err.message });
+          if (err instanceof OverridesCorruptError) return reply.code(503).send({ error: err.message });
+          return reply.code(500).send({ error: 'could not save metadata' });
         }
       });
     });

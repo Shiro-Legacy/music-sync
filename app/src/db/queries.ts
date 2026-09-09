@@ -1,4 +1,4 @@
-import type { LocalTrack, LocalTrackState, TrackEntry, TrackFormat } from '@music-sync/shared';
+import { TrackMetadataPatchSchema, type LocalTrack, type LocalTrackState, type TrackEntry, type TrackFormat } from '@music-sync/shared';
 
 import { db } from './schema';
 
@@ -69,9 +69,13 @@ export interface StateCounts {
  * Inserts or updates rows from manifest entries. Preserves local-only columns
  * (state, localUri, errorCount) on conflict; new rows start as 'queued'.
  */
-export function upsertFromManifest(tracks: readonly TrackEntry[]): void {
+export function upsertFromManifest(
+  tracks: readonly TrackEntry[],
+  serverId = getServerConfig()?.serverId ?? '',
+): void {
   const now = Date.now();
   db.withTransactionSync(() => {
+    if (serverId !== '') kvSet('trackLibraryServerId', serverId);
     const stmt = db.prepareSync(
       `INSERT INTO tracks (id, path, contentKey, format, title, artist, albumArtist, album,
                            trackNo, discNo, year, genre, durationSec, size, artworkId,
@@ -83,8 +87,10 @@ export function upsertFromManifest(tracks: readonly TrackEntry[]): void {
          path = excluded.path,
          contentKey = excluded.contentKey,
          format = excluded.format,
-         title = excluded.title,
-         artist = excluded.artist,
+         title = COALESCE((SELECT title FROM pending_metadata
+           WHERE trackId = excluded.id AND serverId = $serverId AND contentKey = excluded.contentKey), excluded.title),
+         artist = COALESCE((SELECT artist FROM pending_metadata
+           WHERE trackId = excluded.id AND serverId = $serverId AND contentKey = excluded.contentKey), excluded.artist),
          albumArtist = excluded.albumArtist,
          album = excluded.album,
          trackNo = excluded.trackNo,
@@ -101,6 +107,7 @@ export function upsertFromManifest(tracks: readonly TrackEntry[]): void {
     try {
       for (const t of tracks) {
         stmt.executeSync({
+          $serverId: serverId,
           $id: t.id,
           $path: t.path,
           $contentKey: t.contentKey,
@@ -124,6 +131,48 @@ export function upsertFromManifest(tracks: readonly TrackEntry[]): void {
     } finally {
       stmt.finalizeSync();
     }
+  });
+}
+
+export interface PendingMetadata {
+  trackId: string;
+  serverId: string;
+  contentKey: string;
+  title: string;
+  artist: string;
+  generation: number;
+}
+
+/** Save immediately, with an outbox entry in the same transaction. */
+export function saveTrackMetadata(id: string, title: string, artist: string, serverId: string): void {
+  const metadata = TrackMetadataPatchSchema.parse({ title, artist });
+  if (getServerConfig()?.serverId !== serverId || kvGet('trackLibraryServerId') !== serverId) {
+    throw new Error('Sync this library before editing its songs.');
+  }
+  db.withTransactionSync(() => {
+    const result = db.runSync('UPDATE tracks SET title = ?, artist = ? WHERE id = ?', metadata.title, metadata.artist, id);
+    if (result.changes === 0) throw new Error('This song is no longer in the library.');
+    db.runSync(
+      `INSERT INTO pending_metadata (trackId, serverId, contentKey, title, artist, generation)
+       SELECT id, ?, contentKey, ?, ?, 1 FROM tracks WHERE id = ?
+       ON CONFLICT(serverId, trackId) DO UPDATE SET title = excluded.title,
+         artist = excluded.artist, contentKey = excluded.contentKey,
+         generation = pending_metadata.generation + 1`,
+      serverId, metadata.title, metadata.artist, id,
+    );
+  });
+}
+
+export function listPendingMetadata(serverId: string): PendingMetadata[] {
+  return db.getAllSync<PendingMetadata>('SELECT * FROM pending_metadata WHERE serverId = ?', serverId);
+}
+
+/** A late response must not acknowledge a newer edit made during the request. */
+export function acknowledgeMetadata(edit: PendingMetadata): void {
+  db.withTransactionSync(() => {
+    db.runSync('DELETE FROM pending_metadata WHERE serverId = ? AND trackId = ? AND generation = ?',
+      edit.serverId, edit.trackId, edit.generation);
+    setLastEtag(null);
   });
 }
 

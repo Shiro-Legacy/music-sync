@@ -9,6 +9,7 @@ import {
   getLastRev,
   getLastSyncAt,
   getServerConfig,
+  listPendingMetadata,
   syncedBytes,
   type StateCounts,
 } from '../../src/db/queries';
@@ -79,6 +80,8 @@ export default function SyncScreen() {
   };
 
   const pct = sync.total > 0 ? Math.min(1, sync.done / sync.total) : 0;
+  const serverId = getServerConfig()?.serverId;
+  const pendingEdits = serverId === undefined ? 0 : listPendingMetadata(serverId).length;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -119,6 +122,14 @@ export default function SyncScreen() {
         <View style={[styles.card, styles.errorCard]}>
           <Text style={styles.errorTitle}>Sync error</Text>
           <Text style={styles.errorText}>{sync.error}</Text>
+        </View>
+      )}
+
+      {pendingEdits > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>{pendingEdits} song {pendingEdits === 1 ? 'edit' : 'edits'} waiting to sync</Text>
+          <Text style={styles.dim}>Saved on this phone. Connect to your desktop and tap Sync Now to upload.</Text>
+          {sync.metadataError !== undefined && <Text style={styles.errorText}>{sync.metadataError}</Text>}
         </View>
       )}
 

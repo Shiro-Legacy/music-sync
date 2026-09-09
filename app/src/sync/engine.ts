@@ -11,6 +11,7 @@ import {
   getServerConfig,
   incrementErrorCount,
   listByState,
+  listPendingMetadata,
   listTracksForDiff,
   markSynced,
   resetFailedToQueued,
@@ -25,6 +26,8 @@ import {
   type TrackRow,
 } from '../db/queries';
 import { runMigrations } from '../db/schema';
+import { refreshQueueMetadata } from '../player/queue';
+import { pushPendingMetadata } from './metadata';
 import { useSyncStore } from '../store/syncStore';
 import { createDownloader, type Downloader } from './downloader';
 import {
@@ -270,14 +273,18 @@ export async function runSync(trigger: SyncTrigger): Promise<void> {
       useSyncStore.setState({ status: 'unpaired', error: undefined });
       return;
     }
-    useSyncStore.setState({ status: 'checking', error: undefined });
+    useSyncStore.setState({ status: 'checking', error: undefined, metadataError: undefined });
     ensureDirs();
 
+    const metadataError = await pushPendingMetadata(cfg);
+    if (getServerConfig()?.serverId !== cfg.serverId) throw new Error('Pairing changed during sync.');
     const result = await fetchManifest(cfg, getLastEtag());
+    if (getServerConfig()?.serverId !== cfg.serverId) throw new Error('Pairing changed during sync.');
     if (result.kind === 'not-modified') {
       // Library unchanged — still drain anything that never finished.
       drainPendingQueue(cfg);
       startProgress();
+      useSyncStore.setState({ metadataError: metadataError ?? undefined });
       return;
     }
 
@@ -293,7 +300,8 @@ export async function runSync(trigger: SyncTrigger): Promise<void> {
     const plan = computeSyncPlan(playable, local);
 
     // 1. Metadata for every (playable) manifest track.
-    upsertFromManifest(playable);
+    upsertFromManifest(playable, cfg.serverId);
+    void refreshQueueMetadata().catch((error) => console.warn('[player] metadata refresh failed', error));
 
     // 2. Rename rescues — move local files instead of re-downloading.
     const rescueFailures: string[] = [];
@@ -324,6 +332,9 @@ export async function runSync(trigger: SyncTrigger): Promise<void> {
     setLastEtag(result.etag ?? String(manifest.rev));
     setLastRev(manifest.rev);
     startProgress();
+    useSyncStore.setState({
+      metadataError: listPendingMetadata(cfg.serverId).length > 0 ? metadataError ?? undefined : undefined,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     useSyncStore.setState({ status: 'error', error: message });
@@ -361,5 +372,5 @@ export function wipeLocalLibrary(): void {
   }
   clearSyncState();
   ensureDirs();
-  useSyncStore.setState({ status: 'idle', total: 0, done: 0, failed: 0, error: undefined });
+  useSyncStore.setState({ status: 'idle', total: 0, done: 0, failed: 0, error: undefined, metadataError: undefined });
 }
