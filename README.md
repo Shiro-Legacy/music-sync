@@ -471,8 +471,8 @@ State as of 2026-09-09. Update this section when it changes; it is the hand-off 
 
 | Phone | Library | iOS | Build installed | Notes |
 |---|---|---|---|---|
-| J's iPhone 14 | `default` | 18 | main `bc56607`, 2026-09-09 | Cert trusted. Includes the YouTube import screen; launch after install needs the phone unlocked. |
-| H's iPhone SE 3 | `h` | 26 | main `bc56607`, 2026-09-09 | Cert trusted (devicectl launch succeeded 2026-09-09). Includes the YouTube import screen. Pairing to `h` still **unconfirmed** on the phone. |
+| J's iPhone 14 | `default` | 18 | main `8f94270`, 2026-09-09 09:57 | Cert trusted. Installed over Wi-Fi with `xcrun devicectl device install app` from the DerivedData Release build; includes the YouTube import screen and player layout fix. Launch after install needs the phone unlocked. |
+| H's iPhone SE 3 | `h` | 26 | main `8f94270`, 2026-09-09 09:37 | Cert trusted (devicectl launch succeeded 2026-09-09). Includes the YouTube import screen and the SE full-player layout fix; on-phone layout check still pending. Pairing to `h` still **unconfirmed** on the phone. |
 
 Both profiles were re-signed 2026-09-05 and expire **~2026-09-12**. List device ids with `xcrun xctrace list devices`; install fails if the phone is locked at connect time.
 
