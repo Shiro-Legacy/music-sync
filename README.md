@@ -443,7 +443,7 @@ After every re-sign the app installs but the launch step fails with `FBSOpenAppl
 
 The main checkout is shared (peers, the running server, device builds), so feature work goes in a worktree: `git worktree add .worktrees/<name> -b <branch> main` (`.worktrees/` is excluded via `.git/info/exclude`). Do **not** symlink root `node_modules` wholesale — npm workspace links would resolve `@music-sync/shared` into main's packages and the worktree's schema changes become invisible to tsc. Instead create `node_modules/` in the worktree, symlink every entry of main's `node_modules/*` and `.bin` into it, point `node_modules/@music-sync/{shared,server,app}` at `../../<pkg>`, and symlink `app/`, `server/`, `shared/` `node_modules` dirs directly. Then `npx vitest run --root <pkg>` / `npm run typecheck --workspace <pkg>` from the worktree root. Device builds from a worktree: `npx expo run:ios` from `<worktree>/app`, optionally `-derivedDataPath build` under `app/ios`.
 
-One worktree exists today: `.worktrees/feat-loudness` @ `cbcf858`, already merged into main. It is safe to remove (`git worktree remove .worktrees/feat-loudness`) once the server is started from the main checkout instead of from it.
+No worktrees or side branches exist today; everything is on `main`.
 
 ## Backlog
 
@@ -451,7 +451,6 @@ Not started. In priority order:
 
 1. Confirm H's iPhone SE launches (trust cert) and pair it to library `h`.
 2. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
-3. Remove the merged `feat/loudness` worktree and branch.
 
 ## Not in product
 
