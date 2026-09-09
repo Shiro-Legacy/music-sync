@@ -2,9 +2,9 @@
 
 Personal iPhone music player that mirrors a desktop library over home Wi-Fi.
 
-**This file is the only living product document.** If another markdown file disagrees with it, this file wins. When behavior, protocol, schema, CLI, playback, sync, playlists, build, or tests change, update the matching section here in the same change. Do not add new markdown for product knowledge.
+**This file is the static product document.** It explains what MusicSync is and how to build, run, and test it — nothing personal, nothing that changes between sessions. If another markdown file disagrees with it on product behavior, this file wins. When behavior, protocol, schema, CLI, playback, sync, playlists, build, or tests change, update the matching section here in the same change. Do not add new markdown for product knowledge.
 
-`.quad/` is gitignored session scratch, not documentation. Agent process rules live in `AGENTS.md` (loaded by coding agents; `CLAUDE.md` imports it).
+Mutable deployment state (devices, libraries, backlog, signing identity) lives in `DEPLOYMENT.md`, which is **gitignored** — it never goes to GitHub. `.quad/` is gitignored session scratch, not documentation. Agent process rules live in `AGENTS.md` (loaded by coding agents; `CLAUDE.md` imports it).
 
 ## Contents
 
@@ -24,9 +24,7 @@ Personal iPhone music player that mirrors a desktop library over home Wi-Fi.
 14. [Decisions](#decisions)
 15. [Library hygiene](#library-hygiene)
 16. [Lessons](#lessons)
-17. [Current deployment](#current-deployment)
-18. [Backlog](#backlog)
-19. [Not in product](#not-in-product)
+17. [Not in product](#not-in-product)
 
 ## What it is
 
@@ -173,7 +171,7 @@ Two variants, selected by `APP_VARIANT` in `app/app.config.ts`:
 | Bundle id | `com.jiaqi.musicsync` | `com.jiaqi.musicsync.dev` |
 | JS | embedded Release bundle | Metro / expo-dev-client |
 
-`ios/` holds **one variant at a time**. Switching variants means a clean prebuild with the right env var. Signing team is `appleTeamId: BK5VXTTH6P` (Personal Team, 7-day free profiles).
+`ios/` holds **one variant at a time**. Switching variants means a clean prebuild with the right env var. The signing team (Personal Team, 7-day free profiles) comes from `APPLE_TEAM_ID` in `app/.env.local` (gitignored; Expo CLI loads it automatically).
 
 ### Navigation
 
@@ -325,7 +323,7 @@ No `APP_VARIANT` → release-variant identity (`com.jiaqi.musicsync`) in a Debug
 1. USB cable, unlock, tap **Trust**. Then Settings → Privacy & Security → **Developer Mode** on (the row appears only after a Mac with Xcode has talked to the phone) → restart → confirm.
 2. Xcode → Settings → Accounts → add your free Apple ID. Team is "Your Name (Personal Team)".
 3. `cd app && npx expo run:ios --device --configuration Release` (`--device` with no argument picks from a list). Release embeds the JS bundle; no Metro needed.
-4. If signing fails ("requires a development team"), `open ios/MusicSync.xcworkspace`, select the MusicSync target → Signing & Capabilities → Automatically manage signing → Personal Team. `appleTeamId: BK5VXTTH6P` is already in `app.config.ts`, so a later clean prebuild should keep the team. Close Xcode and rerun the CLI command.
+4. If signing fails ("requires a development team"), `open ios/MusicSync.xcworkspace`, select the MusicSync target → Signing & Capabilities → Automatically manage signing → Personal Team. Then put the team id in `app/.env.local` as `APPLE_TEAM_ID=<your team id>` (find it in Xcode → Settings → Accounts) so a later clean prebuild keeps the team. Close Xcode and rerun the CLI command.
 5. On the phone: Settings → General → **VPN & Device Management** → Developer App → Trust. Then allow **Local Network** on first launch (or Settings → Privacy & Security → Local Network → MusicSync).
 6. Run the [playback smoke](#iphone-playback-smoke) before treating the install as done.
 
@@ -339,6 +337,18 @@ cd app && npx expo run:ios --device --configuration Release
 ```
 
 Device builds: `cd app` first. Never run `expo run:ios` from the repo root.
+
+### Re-sign after the 7-day profile lapses
+
+`expo run:ios` does not pass `-allowProvisioningUpdates`, so once the 7-day profile has lapsed it fails with `No profiles for 'com.jiaqi.musicsync'`. Mint a profile once from `app/ios/`, then install:
+
+```bash
+cd app/ios && xcodebuild -workspace MusicSync.xcworkspace -scheme MusicSync -configuration Release \
+  -destination 'id=<UDID>' -allowProvisioningUpdates build
+cd .. && npx expo run:ios --device <UDID> --configuration Release
+```
+
+After every re-sign the app installs but the launch step fails with `FBSOpenApplicationErrorDomain error 3` (invalid signature / profile not trusted). That is expected, not a build failure: confirm with `xcrun devicectl device info apps --device <UDID> | grep -i musicsync`, then on the phone Settings → General → VPN & Device Management → trust the Apple Development cert and launch from the home screen. `devicectl` launch can also fail with `CoreDeviceError 10002` when the phone is locked. List device ids with `xcrun xctrace list devices`; install fails if the phone is locked at connect time.
 
 ### Dev client (JS Fast Refresh)
 
@@ -450,58 +460,9 @@ Apply when a library indexes as all `Unknown Artist`, or before the first phone 
 
 **Alert.prompt refresh is device-only.** On a physical iPhone (iOS 18), a React state update whose paint lands during Alert.prompt keyboard teardown can be swallowed. The iOS Simulator never shows this. Maestro green on sim is not proof. Fix: refresh immediately and again at 400ms (`refreshAfterPrompt` in `app/app/(tabs)/playlists.tsx`). Do not reach for `InteractionManager.runAfterInteractions`. Assert list rows with a regex/prefix plus an absence precheck — concatenated a11y text is not the string you typed. Diagnose UI bugs with two probes (what the screen shows + a direct SQLite read).
 
-**Shared checkout.** Announce before switching branches, or use a git worktree. A mid-build branch switch ships stale code to the phone.
+**Shared checkout.** Announce before switching branches, or use a git worktree. A mid-build branch switch ships stale code to the phone. Feature work goes in a worktree: `git worktree add .worktrees/<name> -b <branch> main` (`.worktrees/` is excluded via `.git/info/exclude`). Do **not** symlink root `node_modules` wholesale — npm workspace links would resolve `@music-sync/shared` into main's packages and the worktree's schema changes become invisible to tsc. Instead create `node_modules/` in the worktree, symlink every entry of main's `node_modules/*` and `.bin` into it, point `node_modules/@music-sync/{shared,server,app}` at `../../<pkg>`, and symlink `app/`, `server/`, `shared/` `node_modules` dirs directly. Then `npx vitest run --root <pkg>` / `npm run typecheck --workspace <pkg>` from the worktree root. Device builds from a worktree: `npx expo run:ios` from `<worktree>/app`, optionally `-derivedDataPath build` under `app/ios`.
 
 **Wrong cwd.** `expo run:ios` from repo root (not `app/`) generates a junk Expo project at root. Always `cd app` first.
-
-## Current deployment
-
-State as of 2026-09-09. Update this section when it changes; it is the hand-off between sessions.
-
-### Server (this Mac)
-
-- Config `~/.music-sync/config.json` is v2, port **5300** (5299 was taken). Two libraries: `default` = `~/Music/MusicSync-Test` (261 tracks, J) and `h` = `~/Music/MusicSync-H` (272 tracks, H). Both fully loudness-measured; values persist in `~/.music-sync/index-<name>.json`, so restarts do not re-measure.
-- The server runs as a foreground/session process and dies with the terminal that started it. Start it at the beginning of any session that needs sync: `npm -C server start` (config supplies music dirs and port). Check a port with `lsof -nP -iTCP:5300 -sTCP:LISTEN`.
-- Restarting does **not** require re-pairing. Changing the Mac's LAN IP does (the app stores the host in kv `serverConfig`): compare `ipconfig getifaddr en0` with what the phone holds, then `npm -C server start -- --pair --library <name>` and rescan.
-- All tags and cover art for both libraries are embedded in the files (see [Library hygiene](#library-hygiene)); no external cover cache is needed.
-- YouTube imports: `yt-dlp` **2026.08.19** installed via Homebrew on 2026-09-09 (`/opt/homebrew/bin/yt-dlp`, bundles mutagen + EJS; `ffmpeg`/`ffprobe` 9.0.1 already present). No real YouTube download has been performed yet — only the offline fixture smoke (`.quad/shared/ytdlp-tools/offline-smoke.py`, scratch).
-- Song tools are implemented in `main`: playlist copying, offline-first title/artist edits with desktop metadata sync, and the SE player layout fix. Typechecks, automated tests, and iOS production JS export pass; **not yet installed or validated on either physical phone**. No server was listening on port 5300 at the end-of-change check; start the updated server before testing uploads.
-
-### Phones
-
-| Phone | Library | iOS | Build installed | Notes |
-|---|---|---|---|---|
-| J's iPhone 14 | `default` | 18 | main `8f94270`, 2026-09-09 09:57 | Cert trusted. Installed over Wi-Fi with `xcrun devicectl device install app` from the DerivedData Release build; includes the YouTube import screen and player layout fix. Launch after install needs the phone unlocked. |
-| H's iPhone SE 3 | `h` | 26 | main `8f94270`, 2026-09-09 09:37 | Cert trusted (devicectl launch succeeded 2026-09-09). Includes the YouTube import screen and the SE full-player layout fix; on-phone layout check still pending. Pairing to `h` still **unconfirmed** on the phone. |
-
-Both profiles were re-signed 2026-09-05 and expire **~2026-09-12**. List device ids with `xcrun xctrace list devices`; install fails if the phone is locked at connect time.
-
-### Re-sign / install procedure that actually works
-
-`expo run:ios` does not pass `-allowProvisioningUpdates`, so once the 7-day profile has lapsed it fails with `No profiles for 'com.jiaqi.musicsync'`. Mint a profile once from `app/ios/`, then install:
-
-```bash
-cd app/ios && xcodebuild -workspace MusicSync.xcworkspace -scheme MusicSync -configuration Release \
-  -destination 'id=<UDID>' -allowProvisioningUpdates build
-cd .. && npx expo run:ios --device <UDID> --configuration Release
-```
-
-After every re-sign the app installs but the launch step fails with `FBSOpenApplicationErrorDomain error 3` (invalid signature / profile not trusted). That is expected, not a build failure: confirm with `xcrun devicectl device info apps --device <UDID> | grep -i musicsync`, then on the phone Settings → General → VPN & Device Management → trust the Apple Development cert and launch from the home screen. `devicectl` launch can also fail with `CoreDeviceError 10002` when the phone is locked.
-
-### Shared checkout and worktrees
-
-The main checkout is shared (peers, the running server, device builds), so feature work goes in a worktree: `git worktree add .worktrees/<name> -b <branch> main` (`.worktrees/` is excluded via `.git/info/exclude`). Do **not** symlink root `node_modules` wholesale — npm workspace links would resolve `@music-sync/shared` into main's packages and the worktree's schema changes become invisible to tsc. Instead create `node_modules/` in the worktree, symlink every entry of main's `node_modules/*` and `.bin` into it, point `node_modules/@music-sync/{shared,server,app}` at `../../<pkg>`, and symlink `app/`, `server/`, `shared/` `node_modules` dirs directly. Then `npx vitest run --root <pkg>` / `npm run typecheck --workspace <pkg>` from the worktree root. Device builds from a worktree: `npx expo run:ios` from `<worktree>/app`, optionally `-derivedDataPath build` under `app/ios`.
-
-The merged song-tools worktree remains at `.worktrees/song-tools` on `feat/song-tools` for verification; `main` includes the changes. No branch switch or device install was performed during this work.
-
-## Backlog
-
-In priority order:
-
-1. Build/install the song-tools changes on both phones (profiles expire ~2026-09-12; see re-sign procedure), start the updated server, and run [Song tools acceptance](#song-tools-acceptance), especially SE control visibility and offline edit → reconnect upload.
-2. Confirm H's iPhone SE is paired to library `h`.
-3. Live YouTube acceptance with an authorized link: preview → edit tags → add → ready on desktop → synced on phone; verify the SE keyboard does not cover Add.
-4. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
 
 ## Not in product
 

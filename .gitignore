@@ -21,3 +21,6 @@ app/web-build/
 .vscode/
 .idea/
 .quad/
+
+# local deployment state — personal info, never committed
+/DEPLOYMENT.md

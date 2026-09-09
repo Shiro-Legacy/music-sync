@@ -15,7 +15,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supportsTablet: false,
     bundleIdentifier: IS_DEV ? 'com.jiaqi.musicsync.dev' : 'com.jiaqi.musicsync',
     // Free-provisioning personal team (7-day profiles — see README "Build the app (Mac)").
-    appleTeamId: 'BK5VXTTH6P',
+    // Kept out of the repo: set in app/.env.local (gitignored); Expo CLI loads it automatically.
+    ...(process.env.APPLE_TEAM_ID ? { appleTeamId: process.env.APPLE_TEAM_ID } : {}),
     infoPlist: {
       NSAppTransportSecurity: {
         // The desktop server speaks plain HTTP on the LAN.
