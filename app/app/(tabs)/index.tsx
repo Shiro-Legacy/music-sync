@@ -82,6 +82,15 @@ export default function LibraryScreen() {
         autoCorrect={false}
         clearButtonMode="while-editing"
       />
+      <Pressable
+        style={({ pressed }) => [styles.importEntry, pressed && styles.rowPressed]}
+        onPress={() => router.push('/library/import')}
+        accessibilityLabel="Import from YouTube"
+      >
+        <Text style={styles.importGlyph}>⇩</Text>
+        <Text style={styles.importLabel}>Import from YouTube</Text>
+        <Text style={styles.importChevron}>›</Text>
+      </Pressable>
       <View style={styles.segments}>
         {SEGMENTS.map(({ key, label }) => (
           <Pressable
@@ -198,6 +207,32 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: 9,
     padding: 2,
+  },
+  importEntry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: colors.card,
+  },
+  importGlyph: {
+    color: colors.accent,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  importLabel: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '500',
+    flex: 1,
+  },
+  importChevron: {
+    color: colors.textDim,
+    fontSize: 18,
   },
   segment: {
     flex: 1,

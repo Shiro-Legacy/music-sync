@@ -106,6 +106,11 @@ Defined in `shared/src/`. Default port **5299**. API version 1.
 | `GET /api/v1/manifest` | required | ETag `"rev-N"`; `If-None-Match` → 304. |
 | `GET /api/v1/tracks/:id` | required | Range requests; ETag is the content key; `If-Match` → 412 on mismatch. Path is never derived from user input — lookup by id only. |
 | `GET /api/v1/artwork/:artworkId` | required | 40-hex SHA-1 only; immutable cache. |
+| `POST /api/v1/imports/preview` | required | `{ url }` → `{ serverId, preview }` with suggested tags, duration, thumbnail. YouTube single-video links only. |
+| `POST /api/v1/imports` | required | `{ url, title, artist }` → `{ serverId, job }`; accepts a durable background import, or returns the existing job/track for that video. |
+| `GET /api/v1/imports` | required | `{ serverId, available, unavailableReason?, jobs }`; recent jobs for the authenticated library only. |
+
+Import routes additionally require `X-MusicSync-Server-Id` to match the paired library identity (409 otherwise). Bodies are strictly validated; clients cannot select a library, filesystem path, or downloader arguments. Errors use `{ error }`. Import schemas live in `shared/src/imports.ts`.
 
 Every request is LAN-only (loopback, RFC1918, link-local, IPv6 ULA/link-local). Non-LAN → 403. Missing/wrong bearer on authenticated routes → 401. Token compare is timing-safe SHA-256 digest match against each library.
 
@@ -131,6 +136,21 @@ Loudness (`server/src/loudness.ts`): after every scan and watcher change, a back
 
 `--remove-library` drops the library from config only. Music files and the index file stay on disk. The last library cannot be removed.
 
+### YouTube imports
+
+The phone can request a song on the paired desktop; the server runs **yt-dlp**, not Stacher. The desktop remains the source of truth. Existing Stacher/manual imports keep working unchanged. Submission requires reaching the running server over LAN; an accepted job continues when the phone closes, provided the server keeps running.
+
+- Library → **Import from YouTube**: paste a video link, preview thumbnail/duration, correct title and artist, then add. Suggestions are not authoritative music metadata. Tags are written into the audio file before indexing.
+- YouTube/YouTube Music watch links, Shorts, embeds, and `youtu.be` links are normalized to one video ID; playlist parameters are discarded. Playlist-only links, other sites, livestreams, and videos longer than 30 minutes are rejected. First version has no search, bulk import, browser cookies, or iOS Share extension.
+- Prefer native AAC/M4A (`bestaudio[ext=m4a]/bestaudio`); only convert fallback audio to AAC/M4A when necessary. Converting lossy audio does not improve quality. No baked-in loudness normalization: the existing server measurement and player gain still apply. Existing `.opus` files remain unsupported and are not converted automatically.
+- Work happens under `<musicDir>/.music-sync-imports/<job-id>/`, ignored by both startup scanning and the watcher. Only validated, fully tagged audio is published as `YouTube/<video-id>.m4a`, using an atomic no-overwrite hard link on the same filesystem. The music volume must support hard links (e.g. APFS or NTFS; not exFAT). Titles do not control paths; correcting tags does not change track identity. A job becomes `ready` only after indexing, without waiting for loudness measurement.
+- One active download across the server, a bounded queue of 10, 100 MiB staging/output limit, 30-second preview timeout, 10-minute import timeout. Subprocesses use fixed arguments without a shell; user CLI config/plugins are disabled. Only canonical YouTube URLs reach yt-dlp.
+- Jobs persist in `~/.music-sync/imports-<name>.json` (under `MUSIC_SYNC_DATA_DIR` when overridden). Recent terminal history is bounded to 100 jobs; pending work is retained. On restart, published files are reconciled and interrupted work is exposed for explicit retry. Corrupt job state is not silently discarded.
+- Same video ID is deduplicated within a library; separate libraries can import the same video independently. Re-submitting an existing import does not rewrite its tags. Old Stacher files without source IDs cannot reliably be recognized as duplicates; no fuzzy title-based deletion or replacement.
+- Job states: `queued`, `downloading`, `processing`, `indexing`, `ready`, `failed`. Desktop `ready` means **Added to library**, not **Available offline**: the latter requires a successfully synced local file. The import screen polls only while focused and foregrounded, then uses the existing sync engine.
+
+**Server tools:** install **yt-dlp 2026.08.19 or newer**, `ffmpeg`, and `ffprobe` on the server machine, not the phone. The official standalone yt-dlp executable includes EJS; full YouTube support also needs a supported JavaScript runtime, explicitly supplied from the server's Node executable. An incomplete tool installation disables importing with an actionable message, not library serving/playback. Keep yt-dlp updated independently of MusicSync: YouTube changes can break extraction. On macOS, use `brew install yt-dlp ffmpeg` and `brew upgrade yt-dlp`; for an official Windows standalone executable, put it on `PATH` and use `yt-dlp -U` to update. `MUSIC_SYNC_YTDLP_PATH` can override the executable location. Download only material you are authorized to save.
+
 ## App
 
 Expo SDK 57, React Native 0.86.2, iOS only.
@@ -149,7 +169,7 @@ Two variants, selected by `APP_VARIANT` in `app/app.config.ts`:
 
 Root stack (`app/app/_layout.tsx`): `(tabs)`, full-screen `/player` modal (gestures off — a sheet pull-down cancels seek-bar drags), `/pair` modal. Migrations run at module load before any screen touches SQLite.
 
-Tabs: **Library** (Artists / Albums / Songs), **Playlists**, **Sync**, **Settings**. Library detail routes live on the root stack: `/library/artist/[artist]`, `/library/album/[key]`, `/library/playlist/[id]`, `/library/playlist/[id]/add`.
+Tabs: **Library** (Artists / Albums / Songs), **Playlists**, **Sync**, **Settings**. Library detail routes live on the root stack: `/library/artist/[artist]`, `/library/album/[key]`, `/library/playlist/[id]`, `/library/playlist/[id]/add`, and `/library/import` (YouTube preview/add and recent import jobs).
 
 Mini player mounts once in the root layout. Visible on tab routes and `/library/*` when a track is loaded and not dismissed. Hidden on `/player` and `/pair`. Swipe left clears the queue. Tap the bar (not its buttons) opens the full player. Play/pause and skip-next are nested pressables.
 
@@ -325,11 +345,13 @@ This overwrites `ios/` with the dev variant (a second App ID, also 7-day expiry)
 ## Testing
 
 ```bash
-npm test              # vitest across workspaces (shared diff, server HTTP/config/indexer/loudness, app queue/playlists/leveling)
+npm test              # vitest across workspaces (shared diff/import schemas, server HTTP/config/indexer/loudness/imports, app queue/playlists/leveling/import client)
 npm run typecheck     # tsc across workspaces
 ```
 
 CI (`.github/workflows/ci.yml`): `npm ci && npm run typecheck && npm test` on Node 24.
+
+Import tests use fake downloader processes/injected runners and temporary libraries, never real YouTube downloads. They must cover URL validation, library isolation, durable acceptance/restart, duplicate requests, failed/partial downloads, and phone request identity/schema handling. A real-toolchain offline smoke can feed yt-dlp saved metadata for generated audio via a test-only wrapper: verify native M4A passthrough, Opus fallback conversion, literal edited tags, embedded cover, library isolation, and durable restart. File URLs/saved metadata are never enabled by the production importer. Live acceptance requires installed server tools and an authorized public YouTube link: preview/edit tags → add → desktop manifest → local offline playback; close/reopen the phone during import and verify no duplicate on retry.
 
 ### Maestro (simulator UI)
 
@@ -417,13 +439,14 @@ State as of 2026-09-09. Update this section when it changes; it is the hand-off 
 - The server runs as a foreground/session process and dies with the terminal that started it. Start it at the beginning of any session that needs sync: `npm -C server start` (config supplies music dirs and port). Check a port with `lsof -nP -iTCP:5300 -sTCP:LISTEN`.
 - Restarting does **not** require re-pairing. Changing the Mac's LAN IP does (the app stores the host in kv `serverConfig`): compare `ipconfig getifaddr en0` with what the phone holds, then `npm -C server start -- --pair --library <name>` and rescan.
 - All tags and cover art for both libraries are embedded in the files (see [Library hygiene](#library-hygiene)); no external cover cache is needed.
+- YouTube imports: `yt-dlp` **2026.08.19** installed via Homebrew on 2026-09-09 (`/opt/homebrew/bin/yt-dlp`, bundles mutagen + EJS; `ffmpeg`/`ffprobe` 9.0.1 already present). The server runs from `main` with the import routes live. No real YouTube download has been performed yet — only the offline fixture smoke (`.quad/shared/ytdlp-tools/offline-smoke.py`, scratch).
 
 ### Phones
 
 | Phone | Library | iOS | Build installed | Notes |
 |---|---|---|---|---|
-| J's iPhone 14 | `default` | 18 | `cbcf858` (= main `22f9eb5` app code), 2026-09-05 | Cert trusted, leveling verified by ear. |
-| H's iPhone SE 3 | `h` | 26 | `cbcf858`, 2026-09-05 | Install OK; cert trust and pairing to `h` **unconfirmed** on the phone. |
+| J's iPhone 14 | `default` | 18 | `cbcf858` (= main `22f9eb5` app code), 2026-09-05 | Cert trusted, leveling verified by ear. **No import screen yet** — predates the YouTube-imports merge. |
+| H's iPhone SE 3 | `h` | 26 | `cbcf858`, 2026-09-05 | Install OK; cert trust and pairing to `h` **unconfirmed** on the phone. **No import screen yet.** |
 
 Both profiles were re-signed 2026-09-05 and expire **~2026-09-12**. List device ids with `xcrun xctrace list devices`; install fails if the phone is locked at connect time.
 
@@ -449,8 +472,9 @@ No worktrees or side branches exist today; everything is on `main`.
 
 Not started. In priority order:
 
-1. Confirm H's iPhone SE launches (trust cert) and pair it to library `h`.
-2. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
+1. Device builds for both phones from `main` so the Library → Import from YouTube screen is on them (profiles expire ~2026-09-12; see re-sign procedure). Then live acceptance with an authorized link: preview → edit tags → add → ready on desktop → synced on phone; verify the SE keyboard does not cover the Add button.
+2. Confirm H's iPhone SE launches (trust cert) and pair it to library `h`.
+3. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
 
 ## Not in product
 

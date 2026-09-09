@@ -9,6 +9,7 @@ import {
   configFilePath,
   ConfigError,
   dataDir,
+  libraryImportsPath,
   libraryIndexPath,
   loadConfig,
   removeLibrary,
@@ -18,6 +19,7 @@ import {
   type ServerConfig,
 } from './config.js';
 import { buildServer, digestToken, type LibraryRuntime, type ServerDeps } from './http.js';
+import { ImportQueue, LibraryImports } from './imports.js';
 import { scanLibrary } from './indexer.js';
 import { ffmpegAvailable, LoudnessScanner, needsLoudness } from './loudness.js';
 import { printPairing } from './pairing.js';
@@ -187,7 +189,7 @@ async function loudnessSupported(): Promise<boolean> {
   return loudnessEnabled;
 }
 
-async function createRuntime(library: LibraryConfig): Promise<LibraryRuntime> {
+async function createRuntime(library: LibraryConfig, importQueue: ImportQueue): Promise<LibraryRuntime> {
   const store = new IndexStore(libraryIndexPath(library.name));
   store.load();
   store.installExitHandlers();
@@ -208,6 +210,19 @@ async function createRuntime(library: LibraryConfig): Promise<LibraryRuntime> {
     scanner = new LoudnessScanner(library.musicDir, store, { log });
     void scanner.request(); // background: serving starts now, values land as they are measured
   }
+
+  const imports = new LibraryImports({
+    name: library.name,
+    musicDir: library.musicDir,
+    jobsPath: libraryImportsPath(library.name),
+    store,
+    artwork,
+    queue: importQueue,
+    onIndexed: () => {
+      void scanner?.request();
+    },
+  });
+  await imports.reconcile();
 
   startWatcher(library.musicDir, {
     store,
@@ -231,6 +246,7 @@ async function createRuntime(library: LibraryConfig): Promise<LibraryRuntime> {
       if (mime === undefined) return undefined;
       return { filePath: artwork.filePath(artworkId), mime };
     },
+    imports,
   };
 }
 
@@ -282,8 +298,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  const importQueue = new ImportQueue();
   const runtimes: LibraryRuntime[] = [];
-  for (const library of availableLibraries(config)) runtimes.push(await createRuntime(library));
+  for (const library of availableLibraries(config)) {
+    runtimes.push(await createRuntime(library, importQueue));
+  }
 
   const deps: ServerDeps = {
     name: config.name,

@@ -6,6 +6,8 @@ export const DEFAULT_PORT = 5299;
 export const apiRoutes = {
   ping: '/api/v1/ping',
   manifest: '/api/v1/manifest',
+  imports: '/api/v1/imports',
+  importPreview: '/api/v1/imports/preview',
   track: (id: string) => `/api/v1/tracks/${id}`,
   artwork: (artworkId: string) => `/api/v1/artwork/${artworkId}`,
 } as const;

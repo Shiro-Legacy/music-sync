@@ -1,15 +1,22 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import compress from '@fastify/compress';
 import {
   apiRoutes,
+  ImportJobResponseSchema,
+  ImportListResponseSchema,
+  ImportPreviewRequestSchema,
+  ImportPreviewResponseSchema,
+  ImportRequestSchema,
   type Manifest,
   type PingResponse,
   type TrackEntry,
   type TrackFormat,
 } from '@music-sync/shared';
+import { ImportError, type ImportService } from './imports.js';
+import { YoutubeUrlError } from './youtube-url.js';
 
 /** One isolated library exposed by the HTTP layer; getter injection keeps tests lightweight. */
 export interface LibraryRuntime {
@@ -21,6 +28,7 @@ export interface LibraryRuntime {
   getTrackById(id: string): TrackEntry | undefined;
   getTrackFilePath(entry: TrackEntry): string;
   getArtwork(artworkId: string): { filePath: string; mime: string } | undefined;
+  imports?: ImportService;
 }
 
 /** Everything the HTTP layer needs from the rest of the server. */
@@ -149,6 +157,16 @@ function ifMatchSatisfied(header: string, contentKey: string): boolean {
   });
 }
 
+function importService(library: LibraryRuntime): ImportService | undefined {
+  return library.imports;
+}
+
+function sendImportError(reply: FastifyReply, err: unknown): FastifyReply {
+  if (err instanceof ImportError) return reply.code(err.status).send({ error: err.message });
+  if (err instanceof YoutubeUrlError) return reply.code(400).send({ error: err.message });
+  return reply.code(500).send({ error: 'import failed' });
+}
+
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   if (deps.libraries.length === 0) throw new Error('At least one library is required');
 
@@ -201,6 +219,83 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         tracks: library.getTracks(),
       };
       return reply.send(manifest);
+    });
+
+    await scope.register(async (imports) => {
+      imports.addHook('preHandler', async (request, reply) => {
+        const header = request.headers['x-musicsync-server-id'];
+        const value = Array.isArray(header) ? header[0] : header;
+        if (value !== request.library!.serverId) {
+          return reply.code(409).send({ error: 'server identity mismatch' });
+        }
+        return undefined;
+      });
+
+      imports.post(apiRoutes.importPreview, async (request, reply) => {
+        const service = importService(request.library!);
+        if (service === undefined) {
+          return reply.code(503).send({ error: 'YouTube imports are not configured' });
+        }
+        const body = ImportPreviewRequestSchema.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ error: 'invalid request' });
+        try {
+          const preview = await service.preview(body.data.url);
+          return reply.send(
+            ImportPreviewResponseSchema.parse({ serverId: request.library!.serverId, preview }),
+          );
+        } catch (err) {
+          return sendImportError(reply, err);
+        }
+      });
+
+      imports.post(apiRoutes.imports, async (request, reply) => {
+        const service = importService(request.library!);
+        if (service === undefined) {
+          return reply.code(503).send({ error: 'YouTube imports are not configured' });
+        }
+        const body = ImportRequestSchema.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ error: 'invalid request' });
+        try {
+          const result = await service.submit(body.data);
+          return reply.code(result.existingReady ? 200 : 202).send(
+            ImportJobResponseSchema.parse({
+              serverId: request.library!.serverId,
+              job: result.job,
+            }),
+          );
+        } catch (err) {
+          return sendImportError(reply, err);
+        }
+      });
+
+      imports.get(apiRoutes.imports, async (request, reply) => {
+        const service = importService(request.library!);
+        if (service === undefined) {
+          return reply.send(
+            ImportListResponseSchema.parse({
+              serverId: request.library!.serverId,
+              available: false,
+              unavailableReason: 'YouTube imports are not configured',
+              jobs: [],
+            }),
+          );
+        }
+        try {
+          const listed = await service.list();
+          return reply.send(
+            ImportListResponseSchema.parse({
+              serverId: request.library!.serverId,
+              available: listed.available,
+              ...(listed.unavailableReason !== undefined
+                ? { unavailableReason: listed.unavailableReason }
+                : {}),
+              jobs: listed.jobs,
+            }),
+          );
+        } catch (err) {
+          return sendImportError(reply, err);
+        }
+      });
     });
   });
 

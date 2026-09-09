@@ -20,6 +20,11 @@ export function libraryIndexPath(libraryName: string): string {
   return path.join(dataDir, `index-${libraryName}.json`);
 }
 
+/** Per-library YouTube import job history. */
+export function libraryImportsPath(libraryName: string): string {
+  return path.join(dataDir, `imports-${libraryName}.json`);
+}
+
 const LIBRARY_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 export const LibraryConfigSchema = z.object({
