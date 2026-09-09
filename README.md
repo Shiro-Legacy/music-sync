@@ -445,7 +445,7 @@ State as of 2026-09-09. Update this section when it changes; it is the hand-off 
 
 | Phone | Library | iOS | Build installed | Notes |
 |---|---|---|---|---|
-| J's iPhone 14 | `default` | 18 | `cbcf858` (= main `22f9eb5` app code), 2026-09-05 | Cert trusted, leveling verified by ear. **No import screen yet** — predates the YouTube-imports merge. |
+| J's iPhone 14 | `default` | 18 | main `bc56607`, 2026-09-09 | Cert trusted. Includes the YouTube import screen; launch after install needs the phone unlocked. |
 | H's iPhone SE 3 | `h` | 26 | `cbcf858`, 2026-09-05 | Install OK; cert trust and pairing to `h` **unconfirmed** on the phone. **No import screen yet.** |
 
 Both profiles were re-signed 2026-09-05 and expire **~2026-09-12**. List device ids with `xcrun xctrace list devices`; install fails if the phone is locked at connect time.
@@ -472,7 +472,7 @@ No worktrees or side branches exist today; everything is on `main`.
 
 Not started. In priority order:
 
-1. Device builds for both phones from `main` so the Library → Import from YouTube screen is on them (profiles expire ~2026-09-12; see re-sign procedure). Then live acceptance with an authorized link: preview → edit tags → add → ready on desktop → synced on phone; verify the SE keyboard does not cover the Add button.
+1. Device build for H's iPhone SE from `main` (J's iPhone 14 done 2026-09-09) so the Library → Import from YouTube screen is on both phones (profiles expire ~2026-09-12; see re-sign procedure). Then live acceptance with an authorized link: preview → edit tags → add → ready on desktop → synced on phone; verify the SE keyboard does not cover the Add button.
 2. Confirm H's iPhone SE launches (trust cert) and pair it to library `h`.
 3. Test-tooling follow-ups from the review of the Maestro work: an isolated e2e app variant, `testID`s instead of concatenated a11y text, more flows. Notes in `.quad/shared/review-test-tooling-sol.md` (scratch, may be gone).
 
